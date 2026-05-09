@@ -1,0 +1,18 @@
+@import "../styles/tokens.css";
+
+@import "tailwindcss";
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent-sand) 30%, transparent);
+}
+

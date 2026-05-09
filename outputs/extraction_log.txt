@@ -1,0 +1,6 @@
+started_at: 2026-05-08T14:45:04.436Z
+data_dir: data
+ok image data/IMG_3631.jpg chars=245
+ok image data/IMG_A8EDFDBCB8E5-1.jpeg chars=296
+finished_at: 2026-05-08T14:45:32.649Z
+summary documents=2 pdf_ok=0 pdf_err=0 image_ok=2 image_err=0 sha256=d14651701aae4b8d5473b572f7165a52c306fa540741b154240d678df83b40d6
