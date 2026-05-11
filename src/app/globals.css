@@ -1,5 +1,8 @@
 @import "../styles/tokens.css";
 
+/* Tailwind v4: register sources before importing Tailwind (more reliable with Turbopack). */
+@config "../../tailwind.config.ts";
+@source "../../src/**/*.{ts,tsx}";
 @import "tailwindcss";
 
 html,
@@ -10,6 +13,12 @@ body {
 body {
   background: var(--bg);
   color: var(--text);
+}
+
+@media (max-width: 767px) {
+  html {
+    scroll-padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
+  }
 }
 
 ::selection {

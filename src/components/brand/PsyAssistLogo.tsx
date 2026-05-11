@@ -21,9 +21,9 @@ export function PsyAssistLogo({
         width={120}
         height={120}
         priority={priority}
-        sizes="(max-width: 640px) 40px, 48px"
+        sizes="(max-width: 640px) 52px, 64px"
         className={cn(
-          "h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-[color:color-mix(in srgb,var(--text) 10%,transparent)] sm:h-11 sm:w-11 md:h-12 md:w-12",
+          "h-[3.25rem] w-[3.25rem] shrink-0 rounded-full object-cover ring-1 ring-[color:color-mix(in srgb,var(--text) 10%,transparent)] sm:h-14 sm:w-14 md:h-16 md:w-16",
           className
         )}
       />

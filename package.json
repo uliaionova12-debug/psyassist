@@ -11,9 +11,11 @@
     "format": "prettier --write .",
     "extract:raw-text": "node --import tsx scripts/extract-raw-text.ts",
     "clean:raw-text": "node --import tsx scripts/clean-raw-text.ts",
-    "summarize:clean-text": "node --import tsx scripts/summarize-clean-text.ts"
+    "summarize:clean-text": "node --import tsx scripts/summarize-clean-text.ts",
+    "generate:icons": "node scripts/generate-brand-icons.cjs"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.56.0",
     "@tesseract.js-data/eng": "^1.0.0",
@@ -41,6 +43,7 @@
     "prettier": "^3.6.2",
     "prettier-plugin-tailwindcss": "^0.6.14",
     "tailwindcss": "^4.1.8",
+    "to-ico": "^1.1.5",
     "tsx": "^4.21.0",
     "typescript": "^5.8.3"
   }
