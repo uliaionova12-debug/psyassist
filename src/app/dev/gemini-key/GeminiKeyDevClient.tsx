@@ -36,12 +36,12 @@ export function GeminiKeyDevClient() {
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
-        setMessage(data.error ?? `Ошибка ${res.status}`);
+        setMessage(data.error ?? "Не удалось сохранить. Попробуйте ещё раз.");
         setBusy(false);
         return;
       }
       setKeyInput("");
-      setMessage("Ключ сохранён в памяти dev-сервера.");
+      setMessage("Ключ сохранён только для текущей локальной сессии разработки.");
       await refreshStatus();
     } finally {
       setBusy(false);
@@ -54,7 +54,7 @@ export function GeminiKeyDevClient() {
     try {
       const res = await fetch("/api/dev/gemini-key", { method: "DELETE" });
       if (!res.ok) {
-        setMessage(`Ошибка ${res.status}`);
+        setMessage("Не удалось очистить. Попробуйте ещё раз.");
         return;
       }
       setMessage("Ключ очищен.");
@@ -70,10 +70,11 @@ export function GeminiKeyDevClient() {
         <Card className="mx-auto max-w-md space-y-6 p-6 sm:p-8">
           <div>
             <h1 className="text-2xl font-semibold tracking-[-0.03em] text-[color:var(--text)]">
-              Gemini API key (dev)
+              Ключ анализа (локально)
             </h1>
             <p className="mt-3 text-sm leading-relaxed text-[color:var(--muted)]">
-              Ключ хранится только в памяти процесса dev-сервера, не для продакшена, не коммитить в репозиторий.
+              Ключ действует только в текущей сессии разработки на этом компьютере, не подходит для
+              публикации и не должен попадать в репозиторий.
             </p>
             {configured !== null && (
               <p className="mt-2 text-xs text-[color:var(--muted)]">

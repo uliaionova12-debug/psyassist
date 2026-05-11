@@ -48,8 +48,8 @@ export default function ClientPage() {
           </div>
           <h1 className="text-3xl font-semibold tracking-[-0.04em] sm:text-4xl">Клиент</h1>
           <p className="max-w-3xl text-sm leading-relaxed text-[color:var(--muted)] sm:text-base">
-            Пространство для структурированных заметок и инсайтов по клиенту. Пока без авторизации
-            и базы — готовим UX и сущности, затем подключим Supabase.
+            Пространство для структурированных заметок и инсайтов по клиенту. Пока без входа и
+            сохранения между устройствами — готовим интерфейс и сущности.
           </p>
         </div>
 

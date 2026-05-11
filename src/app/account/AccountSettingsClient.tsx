@@ -32,7 +32,7 @@ export function AccountSettingsClient({ initialProfile }: Props) {
     const data = (await res.json().catch(() => null)) as { ok?: boolean; message?: string } | null;
     setBusy(false);
     if (!data?.ok) {
-      setNotice(data?.message ?? "Не удалось сохранить");
+      setNotice("Не удалось сохранить. Попробуйте обновить страницу.");
       return;
     }
     setNotice("Сохранено");

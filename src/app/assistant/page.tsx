@@ -341,7 +341,7 @@ export default function AssistantPage() {
         setBillingSoftNotice(
           data?.message ??
             (data?.code === "BILLING_NOT_CONFIGURED"
-              ? "Оплата на сервере не настроена."
+              ? "Оплата временно недоступна. Обратитесь в поддержку."
               : data?.code === "INVALID_PLAN"
                 ? "Некорректный тариф."
                 : data?.code === "PAYMENT_CREATE_FAILED"
@@ -373,7 +373,7 @@ export default function AssistantPage() {
         eventName: PRODUCT_EVENTS.checkout_failed,
         payload: { plan, reason: "network" },
       });
-      setBillingSoftNotice("Не удалось связаться с сервером оплаты");
+      setBillingSoftNotice("Не удалось связаться с платёжной службой. Попробуйте позже.");
     } finally {
       setCheckoutBusy(false);
     }
@@ -386,7 +386,7 @@ export default function AssistantPage() {
         persistenceNotedRef.current = true;
         if (code === "NO_SESSION" && !loggedInPersistenceRef.current) {
           setBannerRef.current(
-            "Чтобы сохранять кейсы и историю между сессиями, войдите в аккаунт или зарегистрируйтесь — раздел «Вход» в шапке сайта."
+            "Чтобы продолжить и сохранить работу, войдите в PsyAssist."
           );
           return;
         }
@@ -894,11 +894,11 @@ export default function AssistantPage() {
 
         setNavFlowError(
           data.message ??
-            "Не удалось получить уточняющие вопросы. Проверьте ключ AI или повторите позже."
+            "Не удалось загрузить данные. Попробуйте обновить страницу."
         );
         rawDispatch({ type: "NAV_ABORT_TO_POST_REFLECTION" });
       } catch {
-        setNavFlowError("Сетевая ошибка при запросе уточняющих вопросов.");
+        setNavFlowError("Не удалось загрузить данные. Попробуйте обновить страницу.");
         rawDispatch({ type: "NAV_ABORT_TO_POST_REFLECTION" });
       }
     })();
@@ -960,12 +960,12 @@ export default function AssistantPage() {
           type: "NAV_FINAL_ANALYSIS_FAILED",
           message:
             data.message ??
-            "Не удалось собрать финальный анализ. Проверьте ключ AI или повторите позже.",
+            "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch {
         rawDispatch({
           type: "NAV_FINAL_ANALYSIS_FAILED",
-          message: "Сетевая ошибка при запросе финального анализа.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       }
     })();
@@ -1075,7 +1075,7 @@ export default function AssistantPage() {
     if (!session.focusKey || !session.sessionDepth) {
       dispatch({
         type: "REFLECTION_ERROR",
-        message: "Не удалось собрать промпт: отсутствует фокус или глубина.",
+        message: "Не удалось подготовить разбор: уточните фокус и глубину сессии.",
       });
       return;
     }
@@ -1136,13 +1136,14 @@ export default function AssistantPage() {
           type: "REFLECTION_ERROR",
           message:
             data.message ??
-            "Не удалось получить ответ модели. Ответы сохранены — можно повторить позже.",
+            "Не удалось загрузить данные. Ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       } catch {
         setReflectionOverloadRetry(false);
         dispatch({
           type: "REFLECTION_ERROR",
-          message: "Сетевая ошибка при обращении к модели. Ответы сохранены.",
+          message:
+            "Не удалось загрузить данные. Ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       }
     })();
@@ -1177,7 +1178,7 @@ export default function AssistantPage() {
     if (!req || !s1 || !takeaway) {
       dispatch({
         type: "CLOSING_INTEGRATION_ERROR",
-        message: "Не удалось собрать промпт: отсутствует ответ на шаг 1 или 2.",
+        message: "Не удалось подготовить разбор: проверьте ответы на шагах 1 и 2.",
       });
       return;
     }
@@ -1232,13 +1233,14 @@ export default function AssistantPage() {
           type: "CLOSING_INTEGRATION_ERROR",
           message:
             data?.message ??
-            "Не удалось получить ответ модели. Ваши ответы сохранены — можно повторить позже.",
+            "Не удалось загрузить данные. Ваши ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       } catch {
         setClosingIntegrationOverloadRetry(false);
         dispatch({
           type: "CLOSING_INTEGRATION_ERROR",
-          message: "Сетевая ошибка при обращении к модели. Ваши ответы сохранены.",
+          message:
+            "Не удалось загрузить данные. Ваши ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       }
     })();
@@ -1362,12 +1364,12 @@ export default function AssistantPage() {
           type: "TENSION_STOP_FAILURE",
           message:
             data.message ??
-            "Не удалось получить остановку поля. Проверьте ключ AI или попробуйте снова.",
+            "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch {
         dispatch({
           type: "TENSION_STOP_FAILURE",
-          message: "Сетевая ошибка при запросе остановки напряжения.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       }
     })();
@@ -1433,12 +1435,12 @@ export default function AssistantPage() {
           type: "TENSION_HYPOTHESIS_FAILURE",
           message:
             data.message ??
-            "Не удалось получить рабочую гипотезу. Проверьте ключ AI или попробуйте снова.",
+            "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch {
         dispatch({
           type: "TENSION_HYPOTHESIS_FAILURE",
-          message: "Сетевая ошибка при запросе гипотезы напряжения.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       }
     })();
@@ -1495,12 +1497,12 @@ export default function AssistantPage() {
           type: "CHAT_ANALYSIS_FAILURE",
           message:
             data.message ??
-            "Не удалось выполнить анализ переписки. Проверьте ключ AI или повторите позже.",
+            "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch {
         dispatch({
           type: "CHAT_ANALYSIS_FAILURE",
-          message: "Сетевая ошибка при анализе переписки.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       }
     })();
@@ -2221,7 +2223,7 @@ export default function AssistantPage() {
                 Стоп · Не спешим · Сейчас про вас · Сейчас важнее не клиент.
               </p>
               <p className="text-xs leading-relaxed text-[color:var(--muted)]">
-                Варианты для шага остановки модель выберет из инструкции: {TENSION_STOP_STEP_ONE_OPTIONS}
+                Варианты для шага остановки ассистент подберёт по инструкции: {TENSION_STOP_STEP_ONE_OPTIONS}
               </p>
               <p className="text-sm leading-relaxed text-[color:var(--muted)]">
                 Готовлю уточняющий контакт и один вопрос…
@@ -2413,7 +2415,8 @@ export default function AssistantPage() {
                 <div className="rounded-xl border border-[color:color-mix(in srgb, var(--accent-sand) 40%, var(--border))] bg-[color:color-mix(in srgb, var(--accent-sand) 12%, white)] px-4 py-4">
                   <p className="text-sm font-semibold text-[color:var(--text)]">Не получилось сформировать блок</p>
                   <p className="mt-2 text-sm leading-relaxed text-[color:var(--muted)]">
-                    {session.closingIntegrationError || "Ошибка обращения к модели."}
+                    {session.closingIntegrationError ||
+                      "Не удалось загрузить данные. Попробуйте обновить страницу."}
                   </p>
                 </div>
               )}

@@ -18,18 +18,18 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "Некорректные данные формы." }, { status: 400 });
   }
   if (!body || typeof body !== "object" || !("key" in body)) {
-    return NextResponse.json({ error: "Expected { key: string }" }, { status: 400 });
+    return NextResponse.json({ error: "Укажите ключ в поле ввода." }, { status: 400 });
   }
   const raw = (body as { key: unknown }).key;
   if (typeof raw !== "string") {
-    return NextResponse.json({ error: "key must be a string" }, { status: 400 });
+    return NextResponse.json({ error: "Ключ должен быть текстом." }, { status: 400 });
   }
   const key = raw.trim();
   if (!key) {
-    return NextResponse.json({ error: "key must not be empty" }, { status: 400 });
+    return NextResponse.json({ error: "Введите непустой ключ." }, { status: 400 });
   }
   setGeminiRuntimeApiKey(key);
   return NextResponse.json({ ok: true as const });

@@ -5,6 +5,7 @@ import {
 } from "@google/generative-ai";
 
 import { getGeminiRuntimeApiKey } from "@/lib/ai/gemini-runtime-key";
+import { stripClinicalMarkdown } from "@/lib/clinical/markdown-strip";
 import { SUPERVISION_OVERRIDE } from "@/lib/clinical/reflection";
 import { emitFounderTelemetry, type FounderGeminiTelemetryOptions } from "@/lib/telemetry/founder";
 
@@ -33,13 +34,12 @@ function sdkRootRequestOptions(): { timeout: number; baseUrl?: string } {
 }
 
 const AI_NOT_CONFIGURED_BASE =
-  "Анализ недоступен: не настроен доступ к модели Gemini. Добавьте в окружение переменную GEMINI_API_KEY " +
-  "(или AI_INTEGRATIONS_GEMINI_API_KEY при своём прокси). Локально — в файл `.env.local` в корне проекта, затем перезапустите dev-сервер.";
+  "Анализ временно недоступен: служба анализа не подключена. Если вы отвечаете за запуск проекта, проверьте конфигурацию приложения.";
 
 function aiNotConfiguredMessage(): string {
   const devHint =
     process.env.NODE_ENV === "development"
-      ? " В режиме разработки ключ можно временно задать на странице /dev/gemini-key (только dev, в памяти процесса)."
+      ? " В режиме разработки см. инструкции для разработчиков в репозитории проекта."
       : "";
   return AI_NOT_CONFIGURED_BASE + devHint;
 }
@@ -75,9 +75,9 @@ export type GeminiUserPart =
   | { type: "text"; text: string }
   | { type: "inline"; mimeType: string; base64: string };
 
-function networkMessage(prefix: string, err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  return `${prefix}${msg}`;
+/** User-visible: never append raw provider error text (may contain sensitive or technical details). */
+function userFacingLoadFailure(): string {
+  return "Не удалось загрузить данные. Попробуйте обновить страницу.";
 }
 
 type TemporaryAiOverload = {
@@ -258,7 +258,7 @@ async function generateContentWithResilience(args: {
     return {
       ok: false,
       code: "NETWORK_ERROR",
-      message: "Не удалось вызвать модель: превышено время ожидания или запрос прерван.",
+      message: userFacingLoadFailure(),
     };
   }
 
@@ -266,14 +266,14 @@ async function generateContentWithResilience(args: {
     return {
       ok: false,
       code: "MODEL_ERROR",
-      message: `Модель недоступна (${lastErr.status}). ${lastErr.message}`.slice(0, 400),
+      message: userFacingLoadFailure(),
     };
   }
 
   return {
     ok: false,
     code: "NETWORK_ERROR",
-    message: networkMessage("Не удалось вызвать модель: ", lastErr),
+    message: userFacingLoadFailure(),
   };
 }
 
@@ -304,14 +304,13 @@ async function generateWithSdk(
       return {
         ok: false,
         code: "EMPTY_MODEL_OUTPUT",
-        message: "Модель вернула пустой ответ. Попробуйте повторить запрос позже.",
+        message: "Не удалось получить ответ. Попробуйте повторить запрос позже.",
       };
     }
 
-    return { ok: true, text };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, code: "NETWORK_ERROR", message: networkMessage("Не удалось вызвать модель: ", msg) };
+    return { ok: true, text: stripClinicalMarkdown(text) };
+  } catch {
+    return { ok: false, code: "NETWORK_ERROR", message: userFacingLoadFailure() };
   }
 }
 

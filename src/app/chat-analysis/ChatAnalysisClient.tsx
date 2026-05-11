@@ -25,6 +25,7 @@ import {
   persistence_list_cases,
 } from "@/lib/persistence/assistant-client";
 import type { SupervisionCase, SupervisionCaseSummary } from "@/lib/persistence/types";
+import { stripClinicalMarkdown } from "@/lib/clinical/markdown-strip";
 import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
 
 import { CasePicker } from "@/components/cases/CasePicker";
@@ -159,9 +160,9 @@ export function ChatAnalysisClient() {
       setCasesLoading(false);
       if (!r.ok) {
         setCasesFetchError(
-          r.code === "NO_SESSION" || r.code === "SUPABASE_DISABLED"
-            ? null
-            : "Не удалось загрузить список кейсов."
+          r.code === "NO_SESSION"
+            ? "Чтобы продолжить и сохранить работу, войдите в PsyAssist."
+            : "Не удалось загрузить данные. Попробуйте обновить страницу."
         );
         setCaseSummaries([]);
         return;
@@ -182,7 +183,7 @@ export function ChatAnalysisClient() {
         setCaseLoadError(
           r.code === "NOT_FOUND"
             ? "Кейс не найден или недоступен."
-            : "Не удалось загрузить кейс."
+            : "Не удалось загрузить данные. Попробуйте обновить страницу."
         );
         setLoadedCase(null);
         setCasePhase("pick");
@@ -215,7 +216,7 @@ export function ChatAnalysisClient() {
         setCaseLoadError(
           r.code === "NOT_FOUND"
             ? "Кейс не найден или недоступен."
-            : "Не удалось загрузить кейс."
+            : "Не удалось загрузить данные. Попробуйте обновить страницу."
         );
         return;
       }
@@ -271,7 +272,7 @@ export function ChatAnalysisClient() {
         setBillingNotice(
           data?.message ??
             (data?.code === "BILLING_NOT_CONFIGURED"
-              ? "Оплата на сервере не настроена."
+              ? "Оплата временно недоступна. Обратитесь в поддержку."
               : data?.code === "INVALID_PLAN"
                 ? "Некорректный тариф."
                 : data?.code === "PAYMENT_CREATE_FAILED"
@@ -301,7 +302,7 @@ export function ChatAnalysisClient() {
         eventName: PRODUCT_EVENTS.checkout_failed,
         payload: { plan, reason: "network" },
       });
-      setBillingNotice("Не удалось связаться с сервером оплаты");
+      setBillingNotice("Не удалось связаться с платёжной службой. Попробуйте позже.");
     } finally {
       setCheckoutBusy(false);
     }
@@ -399,12 +400,14 @@ export function ChatAnalysisClient() {
 
       if (!data?.ok || !data.text?.trim()) {
         setOverloadRetry(data?.status === "temporary_ai_overload" && Boolean(data?.retryable));
-        setComposeError(data?.message ?? data?.code ?? "Не удалось выполнить разбор.");
+        setComposeError(
+          data?.message ?? "Не удалось загрузить данные. Попробуйте обновить страницу."
+        );
         setStep("compose");
         return;
       }
 
-      setResultText(data.text.trim());
+      setResultText(stripClinicalMarkdown(data.text.trim()));
       setStep("result");
       void trackEvent({
         eventName: PRODUCT_EVENTS.chat_analysis_completed,
@@ -412,7 +415,7 @@ export function ChatAnalysisClient() {
       });
     } catch {
       setOverloadRetry(false);
-      setComposeError("Сеть или сервер недоступны. Попробуйте позже.");
+      setComposeError("Не удалось загрузить данные. Попробуйте обновить страницу.");
       setStep("compose");
     }
   }

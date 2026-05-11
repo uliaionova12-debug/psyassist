@@ -103,7 +103,7 @@ export default async function DashboardPage() {
             <div>
               <h1 className="text-2xl font-semibold tracking-[-0.03em]">Дашборд</h1>
               <p className="mt-2 text-sm text-[color:var(--muted)]">
-                Тариф, лимиты разборов и недавние кейсы (данные из Supabase).
+                Ваш тариф, доступные разборы и последние кейсы.
               </p>
             </div>
             <ButtonLink href="/assistant" tone="primary">
