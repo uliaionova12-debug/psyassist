@@ -89,11 +89,14 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ ok: false as const, code: "INVALID_BODY" as const }, { status: 400 });
   }
 
-  await ensureProfileExists(supabase, user.id, user.email ?? null);
+  const upsertRow: Record<string, unknown> = {
+    id: user.id,
+    email: user.email ?? null,
+    updated_at: new Date().toISOString(),
+  };
 
-  const patch: Record<string, unknown> = {};
   if (parsed.data.name !== undefined) {
-    patch.name = parsed.data.name === "" ? null : parsed.data.name;
+    upsertRow.name = parsed.data.name === "" ? null : parsed.data.name;
   }
 
   if (parsed.data.billing) {
@@ -106,20 +109,18 @@ export async function PATCH(req: Request) {
       monthlyCaseUsed: b.monthlyCaseUsed,
       billingPeriodMonth: b.billingPeriodMonth,
     };
-    Object.assign(patch, billingProfileToProfilePatch(bp));
+    Object.assign(upsertRow, billingProfileToProfilePatch(bp));
   }
 
-  if (Object.keys(patch).length === 0) {
+  const payloadKeys = Object.keys(upsertRow).filter((k) => !["id", "email", "updated_at"].includes(k));
+  if (payloadKeys.length === 0) {
     return NextResponse.json({ ok: true as const, skipped: true as const });
   }
 
-  const { error } = await supabase.from("profiles").update(patch).eq("id", user.id);
+  const { error } = await supabase.from("profiles").upsert(upsertRow, { onConflict: "id" });
 
   if (error) {
-    return NextResponse.json(
-      { ok: false as const, code: "UPDATE_FAILED" as const, message: error.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false as const, code: "UPSERT_FAILED" as const }, { status: 500 });
   }
 
   const loaded = await fetchProfileRowForUser(supabase, user.id);

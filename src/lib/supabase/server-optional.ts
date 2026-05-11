@@ -21,7 +21,11 @@ export async function createSupabaseServerClientOptional() {
         return cookieStore.getAll();
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+        } catch {
+          /* Next.js App Router: cookie mutation can throw outside Server Actions; middleware refreshes session. */
+        }
       },
     },
   });
