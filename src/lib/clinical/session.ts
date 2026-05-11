@@ -938,10 +938,33 @@ export function supervisionReducer(
       };
     }
 
-    case "REFLECTION_LOADING":
-      return { ...state, reflectionStatus: "loading", reflectionError: "" };
+    case "REFLECTION_LOADING": {
+      const restartFromClosingFlow =
+        state.step === "closing_step1" ||
+        state.step === "closing_step2" ||
+        state.step === "closing_step3" ||
+        state.step === "closing_step4" ||
+        state.step === "post_reflection";
+      return {
+        ...state,
+        reflectionStatus: "loading",
+        reflectionError: "",
+        ...(restartFromClosingFlow
+          ? {
+              step: "integration_reflection" as const,
+              closingStep1Answer: null,
+              closingTherapistTakeaway: "",
+              closingIntegrationStatus: "idle" as const,
+              closingIntegrationText: "",
+              closingIntegrationError: "",
+              closingNextModuleChoice: null,
+            }
+          : {}),
+      };
+    }
 
     case "REFLECTION_SUCCESS":
+      if (state.step !== "integration_reflection") return state;
       return {
         ...state,
         reflectionStatus: "success",
@@ -954,10 +977,17 @@ export function supervisionReducer(
         chatAnalysisResult: "",
         chatAnalysisError: "",
         ...INITIAL_NAV_FULL_RESET,
+        closingStep1Answer: null,
+        closingTherapistTakeaway: "",
+        closingIntegrationStatus: "idle",
+        closingIntegrationText: "",
+        closingIntegrationError: "",
+        closingNextModuleChoice: null,
         step: "closing_step1",
       };
 
     case "REFLECTION_ERROR":
+      if (state.step !== "integration_reflection") return state;
       return {
         ...state,
         reflectionStatus: "error",
@@ -970,10 +1000,17 @@ export function supervisionReducer(
         chatAnalysisResult: "",
         chatAnalysisError: "",
         ...INITIAL_NAV_FULL_RESET,
+        closingStep1Answer: null,
+        closingTherapistTakeaway: "",
+        closingIntegrationStatus: "idle",
+        closingIntegrationText: "",
+        closingIntegrationError: "",
+        closingNextModuleChoice: null,
         step: "closing_step1",
       };
 
     case "CLOSING_STEP1_SELECT": {
+      if (state.step !== "closing_step1") return state;
       const v = action.value.trim();
       if (!v) return state;
       return {
@@ -985,6 +1022,7 @@ export function supervisionReducer(
     }
 
     case "CLOSING_STEP2_SUBMIT": {
+      if (state.step !== "closing_step2") return state;
       const v = state.draftInput.trim();
       if (!v) return state;
       return {
@@ -1031,6 +1069,7 @@ export function supervisionReducer(
       return { ...state, draftInput: "", step: "closing_step4" };
 
     case "CLOSING_STEP4_SELECT": {
+      if (state.step !== "closing_step4") return state;
       const v = action.value.trim();
       if (!v) return state;
       return {

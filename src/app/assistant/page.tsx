@@ -70,7 +70,6 @@ import {
 import { detect_tension_signals, TENSION_STOP_STEP_ONE_OPTIONS } from "@/lib/clinical/tension";
 import {
   type PersistenceFailureCode,
-  PERSISTENCE_UNAVAILABLE_HINT,
   isPersistenceUnavailableCode,
   persistence_append_case_context,
   persistence_supervision_finish,
@@ -407,11 +406,13 @@ export default function AssistantPage() {
       notePersistenceUnavailable: (code?: PersistenceFailureCode) => {
         if (persistenceNotedRef.current) return;
         persistenceNotedRef.current = true;
-        let msg = PERSISTENCE_UNAVAILABLE_HINT;
         if (code === "NO_SESSION" && !loggedInPersistenceRef.current) {
-          msg = `${PERSISTENCE_UNAVAILABLE_HINT}\n\nЧтобы сохранять кейсы и историю между сессиями, войдите в аккаунт или зарегистрируйтесь — раздел «Вход» в шапке сайта.`;
+          setBannerRef.current(
+            "Чтобы сохранять кейсы и историю между сессиями, войдите в аккаунт или зарегистрируйтесь — раздел «Вход» в шапке сайта."
+          );
+          return;
         }
-        setBannerRef.current(msg);
+        setBannerRef.current("");
       },
       pendingAppendsRef,
     }),
@@ -1114,7 +1115,8 @@ export default function AssistantPage() {
       session.fullNarrative,
       session.supervisionRequest,
       answers,
-      clinicalBrain
+      clinicalBrain,
+      session.supervisorStyle
     );
 
     const sig = `${prompt.length}:${answers.length}:${session.supervisionRequest}:${session.therapistSpecializations.join("|")}:${session.therapistMethods.join("|")}:${session.therapistOtherSpecialization}:${session.therapistOtherMethods}:${session.supervisorStyle ?? ""}:${session.focusLabel ?? ""}`;
@@ -2528,7 +2530,11 @@ export default function AssistantPage() {
                 </div>
               )}
               {showPremiumPostIntroPaywall && (
-                <div className="space-y-5 rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 92%, transparent)] px-4 py-5">
+                <div className="space-y-3">
+                  <p className="text-sm leading-relaxed text-[color:var(--muted)]">
+                    Вы завершили этот цикл разбора. Чуть ниже — как сохранить доступ к следующим кейсам в том же формате.
+                  </p>
+                  <div className="space-y-5 rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 92%, transparent)] px-4 py-5">
                   <h2 className="text-lg font-semibold tracking-[-0.02em] text-[color:var(--text)]">
                     {PREMIUM_PAYWALL_TITLE}
                   </h2>
@@ -2546,6 +2552,7 @@ export default function AssistantPage() {
                     onSelectPractice={() => void handleCheckoutPlan("practice")}
                   />
                   {authReady && !authUser && <GuestPaywallHint />}
+                  </div>
                 </div>
               )}
               {canUseChatAnalysis(billingProfile) && (

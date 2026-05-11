@@ -4,9 +4,6 @@
 
 import type { SupervisionCase, SupervisionCaseSummary } from "@/lib/persistence/types";
 
-export const PERSISTENCE_UNAVAILABLE_HINT =
-  "Сохранение пока не подключено, разбор продолжается в текущей сессии.";
-
 export type PersistenceFailureCode =
   | "SUPABASE_DISABLED"
   | "NO_SESSION"
