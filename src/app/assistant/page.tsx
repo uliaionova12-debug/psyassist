@@ -50,6 +50,7 @@ import {
   POST_REFLECTION_FINISH_LABEL,
   POST_REFLECTION_WEB_ACTIONS,
   buildFullNarrative,
+  clinicalSessionBlocksAuth,
   getCurrentIntakeQuestionKey,
   getQuestionsForFocus,
   getTotalQuestionCount,
@@ -111,15 +112,16 @@ import {
   THERAPIST_SPECIALIZATION_OTHER,
 } from "@/lib/clinical/therapist-profile";
 
-const textareaClass =
-  "mt-4 w-full min-h-[140px] max-h-[min(42vh,320px)] resize-none overflow-y-auto rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 85%, transparent)] px-4 py-3 text-sm leading-relaxed text-[color:var(--text)] placeholder:text-[color:color-mix(in srgb, var(--muted) 85%, transparent)] outline-none transition focus-visible:ring-2 focus-visible:ring-[color:color-mix(in srgb, var(--accent-sand) 55%, transparent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--bg)]";
+/** Draft fields: bounded height with internal scroll so the sticky composer stays on-screen. */
+const draftTextareaClass =
+  "w-full min-h-[120px] max-h-[min(30dvh,220px)] shrink-0 resize-none overflow-y-auto overflow-x-hidden rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 85%, transparent)] px-4 py-3 text-sm leading-relaxed text-[color:var(--text)] placeholder:text-[color:color-mix(in srgb, var(--muted) 85%, transparent)] outline-none transition focus-visible:ring-2 focus-visible:ring-[color:color-mix(in srgb, var(--accent-sand) 55%, transparent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--bg)] sm:max-h-[min(26dvh,200px)]";
 
 const therapistOtherTextareaClass =
   "mt-0 w-full min-h-[96px] max-h-[min(30vh,220px)] resize-none overflow-y-auto rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 85%, transparent)] px-4 py-3 text-sm leading-relaxed text-[color:var(--text)] placeholder:text-[color:color-mix(in srgb, var(--muted) 85%, transparent)] outline-none transition focus-visible:ring-2 focus-visible:ring-[color:color-mix(in srgb, var(--accent-sand) 55%, transparent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--bg)]";
 
-/** Primary actions stay visible at the bottom of the assistant scrollport while step content scrolls above. */
+/** Bottom composer: draft + actions stay pinned to the card scrollport; step copy scrolls above. */
 const assistantStickyBar =
-  "sticky bottom-0 z-[5] -mx-5 mt-3 flex flex-col gap-3 border-t border-[color:var(--border)] bg-[color:var(--card)] px-5 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] shadow-[0_-10px_30px_-18px_rgba(0,0,0,0.08)] sm:-mx-7 sm:px-7";
+  "sticky bottom-0 z-[5] -mx-5 mt-3 flex shrink-0 flex-col gap-3 border-t border-[color:var(--border)] bg-[color:var(--card)] px-5 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] shadow-[0_-10px_30px_-18px_rgba(0,0,0,0.08)] sm:-mx-7 sm:px-7";
 
 const choiceRow =
   "flex w-full cursor-pointer items-start gap-3 rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 88%, transparent)] px-4 py-3 text-left text-sm leading-snug transition hover:border-[color:color-mix(in srgb, var(--accent-sand) 35%, var(--border))]";
@@ -167,6 +169,77 @@ function therapistApiFields(s: SupervisionSession) {
   };
 }
 
+const TENSION_CLIENT_TIMEOUT_MS = 12_000;
+
+function isTensionRetriableFetchFailure(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const name = (err as { name?: string }).name;
+  if (name === "AbortError" || name === "TimeoutError") return true;
+  if (err instanceof TypeError) return true;
+  const msg = String((err as Error).message ?? err);
+  return /network|failed to fetch|load failed|aborted|timed out|timeout/i.test(msg);
+}
+
+/** Single fetch with parent abort + client timeout; caller handles retry. */
+async function fetchTensionOnce(
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  logSuffix: string
+): Promise<Response> {
+  const combined = new AbortController();
+  const onParentAbort = () => combined.abort();
+  signal.addEventListener("abort", onParentAbort);
+  const tid = setTimeout(() => {
+    console.info(
+      `[TENSION] client timeout after ${TENSION_CLIENT_TIMEOUT_MS}ms (${logSuffix})`
+    );
+    combined.abort();
+  }, TENSION_CLIENT_TIMEOUT_MS);
+  try {
+    if (signal.aborted) throw new DOMException("aborted", "AbortError");
+    return await fetch("/api/assistant/tension", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: combined.signal,
+    });
+  } finally {
+    clearTimeout(tid);
+    signal.removeEventListener("abort", onParentAbort);
+  }
+}
+
+async function fetchTensionWithOptionalRetry(
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  logSuffix: string
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (signal.aborted) throw new DOMException("aborted", "AbortError");
+    try {
+      console.info(`[TENSION] request started ${logSuffix} attempt=${attempt}`);
+      const res = await fetchTensionOnce(body, signal, `${logSuffix} attempt=${attempt}`);
+      console.info(
+        `[TENSION] request resolved ${logSuffix} attempt=${attempt} status=${res.status}`
+      );
+      return res;
+    } catch (err) {
+      lastErr = err;
+      console.info(`[TENSION] request failed ${logSuffix} attempt=${attempt}`, err);
+      if (signal.aborted) throw err;
+      if (attempt < 2 && isTensionRetriableFetchFailure(err)) {
+        console.info(`[TENSION] retrying once ${logSuffix}`);
+        continue;
+      }
+      throw err;
+    } finally {
+      console.info(`[TENSION] request attempt settled ${logSuffix} attempt=${attempt}`);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 function buildCaseTextForNav(session: SupervisionSession): string {
   let t = session.fullNarrative.trim();
   if (session.reflectionText.trim()) {
@@ -209,8 +282,6 @@ export default function AssistantPage() {
   const navClarifyingLoadSigRef = useRef<string | null>(null);
   const navFinalLoadSigRef = useRef<string | null>(null);
   const navPersistedSigRef = useRef<string | null>(null);
-  const tensionStopLoadSigRef = useRef<string | null>(null);
-  const tensionHypLoadSigRef = useRef<string | null>(null);
   const chatAnalysisLoadSigRef = useRef<string | null>(null);
 
   const [chatAnalysisImages, setChatAnalysisImages] = useState<Array<{ mimeType: string; base64: string }>>([]);
@@ -282,6 +353,9 @@ export default function AssistantPage() {
 
   const paywallSeenIntroRef = useRef(false);
   const freeIntroCompleteTrackedRef = useRef(false);
+
+  /** Must stay in sync with reducer session for persistence callbacks (async-safe). */
+  const sessionRef = useRef<SupervisionSession>(INITIAL_SUPERVISION_SESSION);
 
   const persistBilling = useCallback((next: UserBillingProfile) => {
     saveBillingProfile(next);
@@ -382,14 +456,20 @@ export default function AssistantPage() {
   const persistenceCtx = useMemo(
     () => ({
       notePersistenceUnavailable: (code?: PersistenceFailureCode) => {
-        if (persistenceNotedRef.current) return;
-        persistenceNotedRef.current = true;
+        const step = sessionRef.current.step;
         if (code === "NO_SESSION" && !loggedInPersistenceRef.current) {
+          if (clinicalSessionBlocksAuth(step)) {
+            return;
+          }
+          if (persistenceNotedRef.current) return;
+          persistenceNotedRef.current = true;
           setBannerRef.current(
             "Чтобы продолжить и сохранить работу, войдите в PsyAssist."
           );
           return;
         }
+        if (persistenceNotedRef.current) return;
+        persistenceNotedRef.current = true;
         setBannerRef.current("");
       },
       pendingAppendsRef,
@@ -404,8 +484,18 @@ export default function AssistantPage() {
 
   const [session, rawDispatch] = useReducer(instrumentedReducer, INITIAL_SUPERVISION_SESSION);
 
-  const sessionRef = useRef(session);
   sessionRef.current = session;
+
+  useEffect(() => {
+    const step = session.step;
+    const blocks = clinicalSessionBlocksAuth(step);
+    const authBlockAllowed = !blocks;
+    console.info(`[FLOW] current_step=${step}`);
+    console.info(`[FLOW] auth_block_allowed=${authBlockAllowed}`);
+    console.info(
+      `[FLOW] clinical_render_priority=${blocks ? "clinical" : "paywall"}`
+    );
+  }, [session.step]);
 
   const prevStepRef = useRef<string | null>(null);
   const prevAnswersLenRef = useRef(0);
@@ -526,8 +616,6 @@ export default function AssistantPage() {
         navClarifyingLoadSigRef.current = null;
         navFinalLoadSigRef.current = null;
         navPersistedSigRef.current = null;
-        tensionStopLoadSigRef.current = null;
-        tensionHypLoadSigRef.current = null;
         chatAnalysisLoadSigRef.current = null;
         setChatAnalysisImages([]);
         setNavFlowError(null);
@@ -1308,72 +1396,72 @@ export default function AssistantPage() {
   }, [session.step]);
 
   useEffect(() => {
-    if (session.step === "question_flow") tensionStopLoadSigRef.current = null;
-  }, [session.step]);
-
-  useEffect(() => {
-    if (session.step === "tension_stop") tensionHypLoadSigRef.current = null;
-  }, [session.step]);
-
-  useEffect(() => {
     if (session.step === "chat_analysis_compose") chatAnalysisLoadSigRef.current = null;
   }, [session.step]);
 
   useEffect(() => {
-    if (session.step !== "tension_stop_loading") {
-      tensionStopLoadSigRef.current = null;
-      return;
-    }
+    if (session.step !== "tension_stop_loading") return;
     const pending = session.tensionPending;
     if (!pending) return;
 
-    const sig = `${pending.moduleIdx}:${pending.originalAnswer}`;
-    if (tensionStopLoadSigRef.current === sig) return;
-    tensionStopLoadSigRef.current = sig;
+    console.info("[TENSION] step entered tension_stop_loading effect");
+    const ac = new AbortController();
+    const body = {
+      phase: "stop" as const,
+      module: {
+        num: pending.moduleNum,
+        name: pending.moduleName,
+        question: pending.moduleQuestion,
+      },
+      caseText: session.fullNarrative,
+      answer: pending.originalAnswer,
+      clinicalBrain: buildOrderedSupervisionContextAppend(
+        therapistApiFields(session),
+        session.focusLabel,
+        session.supervisorStyle
+      ),
+    };
 
     void (async () => {
       try {
-        const res = await fetch("/api/assistant/tension", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            phase: "stop",
-            module: {
-              num: pending.moduleNum,
-              name: pending.moduleName,
-              question: pending.moduleQuestion,
-            },
-            caseText: session.fullNarrative,
-            answer: pending.originalAnswer,
-            clinicalBrain: buildOrderedSupervisionContextAppend(
-              therapistApiFields(session),
-              session.focusLabel,
-              session.supervisorStyle
-            ),
-          }),
-        });
+        const res = await fetchTensionWithOptionalRetry(body, ac.signal, "phase=stop");
+        if (ac.signal.aborted) return;
         const data = (await res.json()) as { ok?: boolean; text?: string; message?: string };
+        if (ac.signal.aborted) return;
         if (data.ok && data.text?.trim()) {
+          console.info("[TENSION] reducer advance TENSION_STOP_SUCCESS");
           dispatch({
             type: "TENSION_STOP_SUCCESS",
             text: stripClinicalMarkdown(data.text.trim()),
           });
           return;
         }
+        console.info("[TENSION] reducer advance TENSION_STOP_FAILURE (response)");
         dispatch({
           type: "TENSION_STOP_FAILURE",
           message:
             data.message ??
             "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
-      } catch {
+      } catch (err) {
+        if (ac.signal.aborted) {
+          console.info("[TENSION] tension_stop_loading aborted (cleanup), no dispatch");
+          return;
+        }
+        console.info("[TENSION] reducer advance TENSION_STOP_FAILURE (exception)", err);
         dispatch({
           type: "TENSION_STOP_FAILURE",
           message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
+      } finally {
+        console.info("[TENSION] tension_stop_loading async handler finished");
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- дедупликация по sig; therapistApiFields(session)
+
+    return () => {
+      ac.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tension stop: explicit session slice only; full `session` would refetch on unrelated fields (e.g. draftInput)
   }, [
     session.step,
     session.tensionPending,
@@ -1384,67 +1472,76 @@ export default function AssistantPage() {
     session.therapistOtherMethods,
     session.supervisorStyle,
     session.focusLabel,
+    session.focusKey,
     dispatch,
   ]);
 
   useEffect(() => {
-    if (session.step !== "tension_hypothesis_loading") {
-      tensionHypLoadSigRef.current = null;
-      return;
-    }
+    if (session.step !== "tension_hypothesis_loading") return;
     const pending = session.tensionPending;
     if (!pending?.probeAnswer) return;
 
-    const sig = `${pending.moduleIdx}:${pending.originalAnswer}:${pending.probeAnswer}`;
-    if (tensionHypLoadSigRef.current === sig) return;
-    tensionHypLoadSigRef.current = sig;
+    console.info("[TENSION] step entered tension_hypothesis_loading effect");
+    const ac = new AbortController();
+    const body = {
+      phase: "hypothesis" as const,
+      module: {
+        num: pending.moduleNum,
+        name: pending.moduleName,
+        question: pending.moduleQuestion,
+      },
+      caseText: session.fullNarrative,
+      originalAnswer: pending.originalAnswer,
+      probeAnswer: pending.probeAnswer,
+      previousContext: buildPreviousModulesContext(session.supervisionAnswers),
+      supervisionRequest: session.supervisionRequest,
+      clinicalBrain: buildOrderedSupervisionContextAppend(
+        therapistApiFields(session),
+        session.focusLabel,
+        session.supervisorStyle
+      ),
+    };
 
     void (async () => {
       try {
-        const res = await fetch("/api/assistant/tension", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            phase: "hypothesis",
-            module: {
-              num: pending.moduleNum,
-              name: pending.moduleName,
-              question: pending.moduleQuestion,
-            },
-            caseText: session.fullNarrative,
-            originalAnswer: pending.originalAnswer,
-            probeAnswer: pending.probeAnswer,
-            previousContext: buildPreviousModulesContext(session.supervisionAnswers),
-            supervisionRequest: session.supervisionRequest,
-            clinicalBrain: buildOrderedSupervisionContextAppend(
-              therapistApiFields(session),
-              session.focusLabel,
-              session.supervisorStyle
-            ),
-          }),
-        });
+        const res = await fetchTensionWithOptionalRetry(body, ac.signal, "phase=hypothesis");
+        if (ac.signal.aborted) return;
         const data = (await res.json()) as { ok?: boolean; text?: string; message?: string };
+        if (ac.signal.aborted) return;
         if (data.ok && data.text?.trim()) {
+          console.info("[TENSION] reducer advance TENSION_HYPOTHESIS_SUCCESS");
           dispatch({
             type: "TENSION_HYPOTHESIS_SUCCESS",
             analysis: stripClinicalMarkdown(data.text.trim()),
           });
           return;
         }
+        console.info("[TENSION] reducer advance TENSION_HYPOTHESIS_FAILURE (response)");
         dispatch({
           type: "TENSION_HYPOTHESIS_FAILURE",
           message:
             data.message ??
             "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
-      } catch {
+      } catch (err) {
+        if (ac.signal.aborted) {
+          console.info("[TENSION] tension_hypothesis_loading aborted (cleanup), no dispatch");
+          return;
+        }
+        console.info("[TENSION] reducer advance TENSION_HYPOTHESIS_FAILURE (exception)", err);
         dispatch({
           type: "TENSION_HYPOTHESIS_FAILURE",
           message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
+      } finally {
+        console.info("[TENSION] tension_hypothesis_loading async handler finished");
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- дедупликация по sig; therapistApiFields(session)
+
+    return () => {
+      ac.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tension hypothesis: explicit session slice only; full `session` would refetch on unrelated fields
   }, [
     session.step,
     session.tensionPending,
@@ -1457,6 +1554,7 @@ export default function AssistantPage() {
     session.therapistOtherMethods,
     session.supervisorStyle,
     session.focusLabel,
+    session.focusKey,
     dispatch,
   ]);
 
@@ -1604,6 +1702,9 @@ export default function AssistantPage() {
 
   const caseStartBlocked = !canStartCase(billingProfile);
 
+  const showPersistenceAuthBanner =
+    Boolean(persistenceBanner) && !clinicalSessionBlocksAuth(session.step);
+
   const lowDataBanner =
     session.narrativeSufficient === false &&
     session.step !== "low_data_choice" &&
@@ -1613,11 +1714,11 @@ export default function AssistantPage() {
     session.step !== "confidentiality_more";
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <Container className="flex min-h-0 flex-1 flex-col justify-center pb-5 pt-1.5 sm:pb-7 sm:pt-2.5">
         <Card className="mx-auto flex max-h-[min(90dvh,880px)] min-h-0 w-full max-w-2xl flex-col overflow-hidden shadow-[var(--shadow)] sm:max-h-[min(92dvh,900px)]">
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain scroll-pb-[max(6rem,calc(env(safe-area-inset-bottom)+5rem))] px-5 py-3 max-md:scroll-pb-[max(7rem,calc(env(safe-area-inset-bottom)+5.5rem))] sm:px-7 sm:py-4">
-          {persistenceBanner && (
+          {showPersistenceAuthBanner && (
             <p className="mb-5 rounded-xl border border-[color:color-mix(in srgb, var(--accent-sand) 40%, var(--border))] bg-[color:color-mix(in srgb, var(--accent-sand) 8%, white)] px-4 py-3 text-sm leading-relaxed text-[color:var(--muted)]">
               {persistenceBanner}
             </p>
@@ -1733,13 +1834,13 @@ export default function AssistantPage() {
                 <label htmlFor="intake-draft" className="sr-only">
                   Ответ
                 </label>
-                <textarea
-                  id="intake-draft"
-                  className={textareaClass}
-                  value={session.draftInput}
-                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-                />
                 <div className={assistantStickyBar}>
+                  <textarea
+                    id="intake-draft"
+                    className={draftTextareaClass}
+                    value={session.draftInput}
+                    onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                  />
                   <Button
                     type="button"
                     className="w-full sm:w-auto"
@@ -1767,13 +1868,13 @@ export default function AssistantPage() {
               <p className="whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
                 {CASE_NARRATIVE_PROMPT_1}
               </p>
-              <textarea
-                id="narrative-context"
-                className={textareaClass}
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
               <div className={assistantStickyBar}>
+                <textarea
+                  id="narrative-context"
+                  className={draftTextareaClass}
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
                 <Button
                   type="button"
                   className="w-full sm:w-auto"
@@ -1794,13 +1895,13 @@ export default function AssistantPage() {
               <p className="whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
                 {CASE_NARRATIVE_PROMPT_2}
               </p>
-              <textarea
-                id="narrative-clinical"
-                className={textareaClass}
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
               <div className={assistantStickyBar}>
+                <textarea
+                  id="narrative-clinical"
+                  className={draftTextareaClass}
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
                 <Button
                   type="button"
                   className="w-full sm:w-auto"
@@ -1859,13 +1960,13 @@ export default function AssistantPage() {
               <p className="text-sm leading-relaxed text-[color:var(--muted)]">
                 Добавьте описание кейса — что важно, чтобы я услышала поле.
               </p>
-              <textarea
-                id="extra-material"
-                className={textareaClass}
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
               <div className={assistantStickyBar}>
+                <textarea
+                  id="extra-material"
+                  className={draftTextareaClass}
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
                 <Button
                   type="button"
                   className="w-full sm:w-auto"
@@ -1887,14 +1988,14 @@ export default function AssistantPage() {
               <p className="text-lg font-medium leading-snug tracking-[-0.02em] text-[color:var(--text)] sm:text-xl sm:leading-snug whitespace-pre-line">
                 {IONOVA_INTAKE_QUESTIONS[session.ionovaIndex] ?? ""}
               </p>
-              <textarea
-                id="ionova-answer"
-                className={textareaClass}
-                placeholder="Ваш ответ как терапевта..."
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
               <div className={assistantStickyBar}>
+                <textarea
+                  id="ionova-answer"
+                  className={draftTextareaClass}
+                  placeholder="Ваш ответ как терапевта..."
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
                 <Button
                   type="button"
                   className="w-full sm:w-auto"
@@ -1967,13 +2068,13 @@ export default function AssistantPage() {
                 {"\n\n"}
                 Ответ можно отправить текстом или голосовым сообщением 🎤
               </p>
-              <textarea
-                id="supervision-request"
-                className={textareaClass}
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
               <div className={assistantStickyBar}>
+                <textarea
+                  id="supervision-request"
+                  className={draftTextareaClass}
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
                 <Button
                   type="button"
                   className="w-full sm:w-auto"
@@ -2194,14 +2295,14 @@ export default function AssistantPage() {
                 <p className="text-xs text-[color:var(--muted)]">
                   Ответ можно отправить текстом или голосовым сообщением 🎤
                 </p>
-                <textarea
-                  id={`bank-q-${session.questionModuleIdx}`}
-                  className={textareaClass}
-                  placeholder="Ваш ответ как терапевта..."
-                  value={session.draftInput}
-                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-                />
                 <div className={assistantStickyBar}>
+                  <textarea
+                    id={`bank-q-${session.questionModuleIdx}`}
+                    className={draftTextareaClass}
+                    placeholder="Ваш ответ как терапевта..."
+                    value={session.draftInput}
+                    onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                  />
                   <Button
                     type="button"
                     className="w-full sm:w-auto"
@@ -2253,14 +2354,14 @@ export default function AssistantPage() {
               <p className="text-sm leading-relaxed text-[color:var(--muted)]">
                 Ответьте на уточняющий вопрос выше — коротко, по существу.
               </p>
-              <textarea
-                id="tension-probe-answer"
-                className={textareaClass}
-                placeholder="Ваш ответ на уточняющий вопрос…"
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
               <div className={assistantStickyBar}>
+                <textarea
+                  id="tension-probe-answer"
+                  className={draftTextareaClass}
+                  placeholder="Ваш ответ на уточняющий вопрос…"
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                   <Button
                     type="button"
@@ -2381,14 +2482,14 @@ export default function AssistantPage() {
               <h1 className="text-2xl font-semibold tracking-[-0.03em] whitespace-pre-line">
                 Что из этого разбора вы забираете с собой в практику?
               </h1>
-              <textarea
-                id="closing-takeaway"
-                className={textareaClass}
-                placeholder="Коротко или развёрнуто — как вам полезно."
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
               <div className={assistantStickyBar}>
+                <textarea
+                  id="closing-takeaway"
+                  className={draftTextareaClass}
+                  placeholder="Коротко или развёрнуто — как вам полезно."
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
                 <Button
                   type="button"
                   className="w-full sm:w-auto"
@@ -2729,21 +2830,23 @@ export default function AssistantPage() {
               <p className="text-lg font-medium leading-snug tracking-[-0.02em] text-[color:var(--text)] sm:text-xl sm:leading-snug whitespace-pre-line">
                 {session.navQuestions[session.navQuestionIndex] ?? ""}
               </p>
-              <textarea
-                id="nav-clarifying-answer"
-                className={textareaClass}
-                placeholder="Ваш ответ как терапевта..."
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
-              <Button
-                type="button"
-                className="w-full sm:w-auto"
-                disabled={session.draftInput.trim().length === 0}
-                onClick={() => dispatch({ type: "NAV_SUBMIT_CLARIFYING_ANSWER" })}
-              >
-                Сохранить ответ и продолжить
-              </Button>
+              <div className={assistantStickyBar}>
+                <textarea
+                  id="nav-clarifying-answer"
+                  className={draftTextareaClass}
+                  placeholder="Ваш ответ как терапевта..."
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
+                <Button
+                  type="button"
+                  className="w-full sm:w-auto"
+                  disabled={session.draftInput.trim().length === 0}
+                  onClick={() => dispatch({ type: "NAV_SUBMIT_CLARIFYING_ANSWER" })}
+                >
+                  Сохранить ответ и продолжить
+                </Button>
+              </div>
             </div>
           )}
 
@@ -2944,32 +3047,32 @@ export default function AssistantPage() {
                   {session.chatAnalysisError.trim()}
                 </div>
               ) : null}
-              <textarea
-                id="chat-analysis-transcript"
-                className={textareaClass}
-                placeholder="Текст переписки или описание того, что на скриншотах…"
-                value={session.draftInput}
-                onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
-              />
-              <div className="space-y-2">
-                <label htmlFor="chat-analysis-files" className="text-sm font-medium text-[color:var(--text)]">
-                  Скриншоты
-                </label>
-                <input
-                  id="chat-analysis-files"
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  multiple
-                  className="block w-full text-sm text-[color:var(--muted)]"
-                  onChange={(e) => onChatAnalysisFiles(e.target.files)}
-                />
-                {chatAnalysisImages.length > 0 ? (
-                  <p className="text-xs text-[color:var(--muted)]">
-                    Загружено изображений: {chatAnalysisImages.length}
-                  </p>
-                ) : null}
-              </div>
               <div className={assistantStickyBar}>
+                <textarea
+                  id="chat-analysis-transcript"
+                  className={draftTextareaClass}
+                  placeholder="Текст переписки или описание того, что на скриншотах…"
+                  value={session.draftInput}
+                  onChange={(e) => dispatch({ type: "SET_DRAFT", value: e.target.value })}
+                />
+                <div className="space-y-2">
+                  <label htmlFor="chat-analysis-files" className="text-sm font-medium text-[color:var(--text)]">
+                    Скриншоты
+                  </label>
+                  <input
+                    id="chat-analysis-files"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    multiple
+                    className="block w-full text-sm text-[color:var(--muted)]"
+                    onChange={(e) => onChatAnalysisFiles(e.target.files)}
+                  />
+                  {chatAnalysisImages.length > 0 ? (
+                    <p className="text-xs text-[color:var(--muted)]">
+                      Загружено изображений: {chatAnalysisImages.length}
+                    </p>
+                  ) : null}
+                </div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                   <Button
                     type="button"

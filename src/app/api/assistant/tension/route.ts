@@ -39,10 +39,12 @@ const BodySchema = z.discriminatedUnion("phase", [StopBodySchema, HypothesisBody
 export async function POST(req: Request) {
   const parsed = BodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
+    console.info("[TENSION] route POST invalid body");
     return NextResponse.json({ ok: false as const, code: "INVALID_BODY" }, { status: 400 });
   }
 
   const body = parsed.data;
+  console.info(`[TENSION] route POST phase=${body.phase} started`);
   const tensionModule: TensionModuleSlice = body.module;
 
   const prompt =
@@ -74,12 +76,19 @@ export async function POST(req: Request) {
   });
 
   const t0 = Date.now();
-  const result = await generateClinicalGeminiCompletion(prompt, {
-    auth,
-    sessionId,
-    phase: telemetryPhase,
-    step: "gemini_completion",
-  });
+  let result: Awaited<ReturnType<typeof generateClinicalGeminiCompletion>>;
+  try {
+    result = await generateClinicalGeminiCompletion(prompt, {
+      auth,
+      sessionId,
+      phase: telemetryPhase,
+      step: "gemini_completion",
+    });
+  } finally {
+    console.info(
+      `[TENSION] route POST phase=${body.phase} gemini await finished latencyMs=${Date.now() - t0}`
+    );
+  }
 
   emitFounderTelemetry(auth, {
     sessionId,
@@ -92,6 +101,7 @@ export async function POST(req: Request) {
   });
 
   if (!result.ok) {
+    console.info(`[TENSION] route POST phase=${body.phase} result=error code=${result.code}`);
     const status =
       result.code === "AI_NOT_CONFIGURED" || result.code === "TEMPORARY_AI_OVERLOAD" ? 200 : 502;
     return NextResponse.json(
@@ -106,5 +116,6 @@ export async function POST(req: Request) {
     );
   }
 
+  console.info(`[TENSION] route POST phase=${body.phase} result=ok`);
   return NextResponse.json({ ok: true as const, text: result.text });
 }
