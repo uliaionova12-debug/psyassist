@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+import { CasePersistenceAuthProvider } from "@/components/auth/CasePersistenceAuthProvider";
 import { BillingCheckoutReturnListener } from "@/components/billing/BillingCheckoutReturnListener";
 import { ConditionalAssistantFooter } from "@/components/layout/ConditionalAssistantFooter";
 import { AppHeader } from "@/components/layout/AppHeader";
@@ -30,11 +31,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ru" className="h-full overflow-x-clip">
       <body className="flex min-h-screen min-h-dvh flex-col overflow-x-clip">
-        <BillingCheckoutReturnListener />
-        <AppHeader />
-        {/* min-h-min prevents flex collapse that lets main overflow under the footer */}
-        <div className="flex min-h-min min-w-0 flex-1 flex-col">{children}</div>
-        <ConditionalAssistantFooter />
+        <CasePersistenceAuthProvider>
+          <BillingCheckoutReturnListener />
+          <AppHeader />
+          {/* min-h-min prevents flex collapse that lets main overflow under the footer */}
+          <div className="flex min-h-min min-w-0 flex-1 flex-col">{children}</div>
+          <ConditionalAssistantFooter />
+        </CasePersistenceAuthProvider>
       </body>
     </html>
   );

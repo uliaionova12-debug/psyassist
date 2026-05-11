@@ -32,12 +32,11 @@ const activationCards = [
   }
 ];
 
-const secondaryLinks = [
-  { href: "/content", label: "Контент" },
-  { href: "/cases", label: "Мои случаи" },
-  { href: "/phrase", label: "Терапевтические фразы" },
-  { href: "/account", label: "Аккаунт" },
-  { href: "/dashboard", label: "Дашборд" }
+const legalFooterLinks = [
+  { href: "/offer", label: "Договор-оферта" },
+  { href: "/privacy", label: "Конфиденциальность" },
+  { href: "/contacts", label: "Контакты" },
+  { href: "/documents", label: "Документы супервизора" }
 ];
 
 export default function HomePage() {
@@ -133,9 +132,9 @@ export default function HomePage() {
             PsyAssist помогает структурировать размышление и документирование — не диагностирует и не
             заменяет очную супервизию.
           </p>
-          <nav aria-label="Дополнительные разделы" className="mt-8">
+          <nav aria-label="Правовая информация" className="mt-8">
             <ul className="flex flex-wrap items-center justify-center gap-x-5 gap-y-3 text-sm">
-              {secondaryLinks.map((item) => (
+              {legalFooterLinks.map((item) => (
                 <li key={item.href}>
                   <Link
                     href={item.href}

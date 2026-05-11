@@ -1,5 +1,6 @@
 "use client";
 
+import { useCasePersistenceAuth } from "@/components/auth/CasePersistenceAuthProvider";
 import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/ui/Container";
 import { Button } from "@/components/ui/Button";
@@ -36,6 +37,8 @@ const insightCards = [
 ];
 
 export default function ClientPage() {
+  const { authReady, authUser, openCasePersistenceAuthModal } = useCasePersistenceAuth();
+
   return (
     <main className="min-h-dvh">
       <Container className="py-10 sm:py-16">
@@ -65,7 +68,17 @@ export default function ClientPage() {
                   <Button
                     tone="secondary"
                     className="w-full"
-                    onClick={() => alert(`MVP: карточка «${c.title}». Хранение подключим позже.`)}
+                    onClick={() => {
+                      if (
+                        authReady &&
+                        !authUser &&
+                        (c.title === "Перенос" || c.title === "Контперенос")
+                      ) {
+                        openCasePersistenceAuthModal();
+                        return;
+                      }
+                      alert(`MVP: карточка «${c.title}». Хранение подключим позже.`);
+                    }}
                   >
                     Открыть
                   </Button>

@@ -62,11 +62,14 @@ import {
   buildOrderedSupervisionContextAppend,
 } from "@/lib/clinical/supervisor-style";
 import { detectSupervisionInNarrative } from "@/lib/clinical/supervision-request";
+import { copyClinicalPlainText } from "@/lib/clinical/clipboard-text";
+import { stripClinicalMarkdown } from "@/lib/clinical/markdown-strip";
 import {
   CASE_BASE,
   build_integration_reflection_prompt,
   type IntegrationReflectionAnswerItem,
 } from "@/lib/clinical/reflection";
+import { buildPremiumSessionPlainExport } from "@/lib/clinical/session-plain-export";
 import { detect_tension_signals, TENSION_STOP_STEP_ONE_OPTIONS } from "@/lib/clinical/tension";
 import {
   type PersistenceFailureCode,
@@ -79,6 +82,7 @@ import {
   flushPendingCaseAppends,
   syncAssistantCaseInitialState,
 } from "@/lib/persistence/assistant-reducer";
+import { useCasePersistenceAuth } from "@/components/auth/CasePersistenceAuthProvider";
 import { CasePurchasePaywall } from "@/components/billing/CasePurchasePaywall";
 import { FreeIntroPaywall } from "@/components/billing/FreeIntroPaywall";
 import { GuestPaywallHint } from "@/components/billing/GuestPaywallHint";
@@ -154,41 +158,6 @@ function fileToInlineBase64(file: File): Promise<{ mimeType: string; base64: str
   });
 }
 
-function buildSessionCopy(session: SupervisionSession): string {
-  const lines: string[] = [];
-  lines.push("Клинический случай", "");
-  lines.push(session.fullNarrative.trim() || "(не указан)");
-  lines.push("");
-  lines.push("Запрос на супервизию", "");
-  lines.push(session.supervisionRequest.trim() || "(не указан)");
-  lines.push("");
-  lines.push("Фокус", "");
-  lines.push(session.focusLabel ?? "(не выбран)");
-  lines.push("");
-  lines.push("Вопросы и ответы", "");
-  session.supervisionAnswers.forEach((a, i) => {
-    lines.push(`${i + 1}. ${a.question}`);
-    lines.push(`Ответ: ${a.answer}`);
-    if (a.analysis?.trim()) {
-      lines.push(`Разбор (напряжение / уточнение): ${a.analysis.trim()}`);
-    }
-    lines.push("");
-  });
-  if (session.reflectionText.trim()) {
-    lines.push("Интеграционная рефлексия", "");
-    lines.push(session.reflectionText.trim());
-  }
-  if (session.reflectionError.trim()) {
-    lines.push("", "Статус анализа", "");
-    lines.push(session.reflectionError.trim());
-  }
-  if (session.navFinalAnalysis.trim()) {
-    lines.push("", "Финальный супервизионный анализ (навигация по уровням)", "");
-    lines.push(session.navFinalAnalysis.trim());
-  }
-  return lines.join("\n");
-}
-
 function therapistApiFields(s: SupervisionSession) {
   return {
     therapistSpecializations: s.therapistSpecializations,
@@ -214,6 +183,7 @@ function buildCaseTextForNav(session: SupervisionSession): string {
 }
 
 export default function AssistantPage() {
+  const { openCasePersistenceAuthModal } = useCasePersistenceAuth();
   const persistenceNotedRef = useRef(false);
   const pendingAppendsRef = useRef<string[]>([]);
   const lastSyncedNarrativeSigRef = useRef("");
@@ -226,7 +196,15 @@ export default function AssistantPage() {
   const [navFlowError, setNavFlowError] = useState<string | null>(null);
   const [reflectionOverloadRetry, setReflectionOverloadRetry] = useState(false);
   const [closingIntegrationOverloadRetry, setClosingIntegrationOverloadRetry] = useState(false);
+  const [sessionCopiedNotice, setSessionCopiedNotice] = useState(false);
+  const sessionCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   setBannerRef.current = (msg: string) => setPersistenceBanner(msg);
+
+  useEffect(() => {
+    return () => {
+      if (sessionCopiedTimerRef.current) clearTimeout(sessionCopiedTimerRef.current);
+    };
+  }, []);
 
   const navClarifyingLoadSigRef = useRef<string | null>(null);
   const navFinalLoadSigRef = useRef<string | null>(null);
@@ -907,7 +885,10 @@ export default function AssistantPage() {
         };
 
         if (data.ok && Array.isArray(data.questions) && data.questions.length > 0) {
-          rawDispatch({ type: "NAV_CLARIFYING_QUESTIONS_READY", questions: data.questions });
+          rawDispatch({
+            type: "NAV_CLARIFYING_QUESTIONS_READY",
+            questions: data.questions.map((q) => stripClinicalMarkdown(String(q))),
+          });
           return;
         }
 
@@ -968,7 +949,10 @@ export default function AssistantPage() {
         };
 
         if (data.ok && data.text?.trim()) {
-          rawDispatch({ type: "NAV_FINAL_ANALYSIS_READY", text: data.text.trim() });
+          rawDispatch({
+            type: "NAV_FINAL_ANALYSIS_READY",
+            text: stripClinicalMarkdown(data.text.trim()),
+          });
           return;
         }
 
@@ -1141,7 +1125,7 @@ export default function AssistantPage() {
 
         if (data.ok && data.text) {
           setReflectionOverloadRetry(false);
-          dispatch({ type: "REFLECTION_SUCCESS", text: data.text });
+          dispatch({ type: "REFLECTION_SUCCESS", text: stripClinicalMarkdown(data.text) });
           return;
         }
 
@@ -1234,7 +1218,10 @@ export default function AssistantPage() {
 
         if (data?.ok && data.text) {
           setClosingIntegrationOverloadRetry(false);
-          dispatch({ type: "CLOSING_INTEGRATION_SUCCESS", text: data.text });
+          dispatch({
+            type: "CLOSING_INTEGRATION_SUCCESS",
+            text: stripClinicalMarkdown(data.text),
+          });
           return;
         }
 
@@ -1365,7 +1352,10 @@ export default function AssistantPage() {
         });
         const data = (await res.json()) as { ok?: boolean; text?: string; message?: string };
         if (data.ok && data.text?.trim()) {
-          dispatch({ type: "TENSION_STOP_SUCCESS", text: data.text.trim() });
+          dispatch({
+            type: "TENSION_STOP_SUCCESS",
+            text: stripClinicalMarkdown(data.text.trim()),
+          });
           return;
         }
         dispatch({
@@ -1433,7 +1423,10 @@ export default function AssistantPage() {
         });
         const data = (await res.json()) as { ok?: boolean; text?: string; message?: string };
         if (data.ok && data.text?.trim()) {
-          dispatch({ type: "TENSION_HYPOTHESIS_SUCCESS", analysis: data.text.trim() });
+          dispatch({
+            type: "TENSION_HYPOTHESIS_SUCCESS",
+            analysis: stripClinicalMarkdown(data.text.trim()),
+          });
           return;
         }
         dispatch({
@@ -1492,7 +1485,10 @@ export default function AssistantPage() {
         });
         const data = (await res.json()) as { ok?: boolean; text?: string; message?: string };
         if (data.ok && data.text?.trim()) {
-          dispatch({ type: "CHAT_ANALYSIS_SUCCESS", text: data.text.trim() });
+          dispatch({
+            type: "CHAT_ANALYSIS_SUCCESS",
+            text: stripClinicalMarkdown(data.text.trim()),
+          });
           return;
         }
         dispatch({
@@ -1524,9 +1520,14 @@ export default function AssistantPage() {
     });
   };
 
-  const copySession = () => {
-    void navigator.clipboard.writeText(buildSessionCopy(session)).catch(() => undefined);
-  };
+  const copySession = useCallback(async () => {
+    const payload = buildPremiumSessionPlainExport(session);
+    const { ok } = await copyClinicalPlainText(payload);
+    if (!ok) return;
+    setSessionCopiedNotice(true);
+    if (sessionCopiedTimerRef.current) clearTimeout(sessionCopiedTimerRef.current);
+    sessionCopiedTimerRef.current = setTimeout(() => setSessionCopiedNotice(false), 2600);
+  }, [session]);
 
   const submitQuestionBankAnswer = () => {
     const text = session.draftInput.trim();
@@ -2238,9 +2239,9 @@ export default function AssistantPage() {
               </p>
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 88%, transparent)] px-4 py-4">
                 <p className="text-sm font-semibold text-[color:var(--text)]">Остановка и один уточняющий вопрос</p>
-                <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
-                  {session.tensionStopText.trim()}
-                </div>
+                  <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
+                    {stripClinicalMarkdown(session.tensionStopText.trim())}
+                  </div>
               </div>
               {session.tensionFlowError.trim() ? (
                 <div className="rounded-xl border border-[color:color-mix(in srgb, var(--accent-sand) 40%, var(--border))] bg-[color:color-mix(in srgb, var(--accent-sand) 10%, white)] px-4 py-3 text-sm leading-relaxed text-[color:var(--muted)] whitespace-pre-line">
@@ -2308,7 +2309,7 @@ export default function AssistantPage() {
                 <div className="max-h-[min(52vh,28rem)] overflow-y-auto overscroll-y-contain rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 88%, transparent)] px-4 py-4">
                   <p className="text-sm font-semibold text-[color:var(--text)]">Интеграционная рефлексия</p>
                   <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
-                    {session.reflectionText}
+                    {stripClinicalMarkdown(session.reflectionText)}
                   </div>
                 </div>
               )}
@@ -2420,7 +2421,7 @@ export default function AssistantPage() {
               {session.closingIntegrationStatus === "success" && session.closingIntegrationText.trim() && (
                 <div className="rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 88%, transparent)] px-4 py-4">
                   <div className="whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
-                    {session.closingIntegrationText.trim()}
+                    {stripClinicalMarkdown(session.closingIntegrationText.trim())}
                   </div>
                 </div>
               )}
@@ -2474,7 +2475,17 @@ export default function AssistantPage() {
                     key={label}
                     type="button"
                     className={choiceRow}
-                    onClick={() => dispatch({ type: "CLOSING_STEP4_SELECT", value: label })}
+                    onClick={() => {
+                      if (
+                        authReady &&
+                        !authUser &&
+                        (label === "Перенос" || label === "Контрперенос")
+                      ) {
+                        openCasePersistenceAuthModal();
+                        return;
+                      }
+                      dispatch({ type: "CLOSING_STEP4_SELECT", value: label });
+                    }}
                   >
                     <span className="text-[color:var(--text)]">{label}</span>
                   </button>
@@ -2496,7 +2507,7 @@ export default function AssistantPage() {
                     Интеграционная рефлексия
                   </p>
                   <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
-                    {session.reflectionText}
+                    {stripClinicalMarkdown(session.reflectionText)}
                   </div>
                 </div>
               )}
@@ -2630,10 +2641,25 @@ export default function AssistantPage() {
                     </Button>
                   </div>
                 </div>
-                <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:flex-wrap">
-                  <Button type="button" tone="ghost" className="w-full sm:w-auto" onClick={copySession}>
-                    Скопировать сессию
-                  </Button>
+                <div className="flex flex-col gap-1 pt-2">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <Button
+                      type="button"
+                      tone="ghost"
+                      className="w-full sm:w-auto"
+                      onClick={() => void copySession()}
+                    >
+                      Скопировать сессию
+                    </Button>
+                  </div>
+                  {sessionCopiedNotice ? (
+                    <p
+                      className="text-xs font-medium text-[color:color-mix(in srgb,var(--accent-green)72%,var(--text))]"
+                      aria-live="polite"
+                    >
+                      Сессия скопирована.
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -2737,7 +2763,7 @@ export default function AssistantPage() {
                   Финальный супервизионный анализ
                 </p>
                 <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
-                  {session.navFinalAnalysis}
+                  {stripClinicalMarkdown(session.navFinalAnalysis)}
                 </div>
               </div>
 
@@ -2790,21 +2816,36 @@ export default function AssistantPage() {
               )}
 
               <div className={assistantStickyBar}>
-                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                  <Button
-                    type="button"
-                    tone="ghost"
-                    className="w-full sm:w-auto"
-                    onClick={() => {
-                      navPersistedSigRef.current = null;
-                      dispatch({ type: "NAV_BACK_TO_POST_REFLECTION" });
-                    }}
-                  >
-                    Вернуться к итогам супервизии
-                  </Button>
-                  <Button type="button" tone="secondary" className="w-full sm:w-auto" onClick={copySession}>
-                    Скопировать сессию
-                  </Button>
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <Button
+                      type="button"
+                      tone="ghost"
+                      className="w-full sm:w-auto"
+                      onClick={() => {
+                        navPersistedSigRef.current = null;
+                        dispatch({ type: "NAV_BACK_TO_POST_REFLECTION" });
+                      }}
+                    >
+                      Вернуться к итогам супервизии
+                    </Button>
+                    <Button
+                      type="button"
+                      tone="secondary"
+                      className="w-full sm:w-auto"
+                      onClick={() => void copySession()}
+                    >
+                      Скопировать сессию
+                    </Button>
+                  </div>
+                  {sessionCopiedNotice ? (
+                    <p
+                      className="text-xs font-medium text-[color:color-mix(in srgb,var(--accent-green)72%,var(--text))]"
+                      aria-live="polite"
+                    >
+                      Сессия скопирована.
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -2820,20 +2861,35 @@ export default function AssistantPage() {
                 <p className="mt-2 text-sm leading-relaxed text-[color:var(--muted)]">{session.navFinalError}</p>
               </div>
               <div className={assistantStickyBar}>
-                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                  <Button
-                    type="button"
-                    className="w-full sm:w-auto"
-                    onClick={() => {
-                      navPersistedSigRef.current = null;
-                      dispatch({ type: "NAV_BACK_TO_POST_REFLECTION" });
-                    }}
-                  >
-                    Вернуться к итогам супервизии
-                  </Button>
-                  <Button type="button" tone="secondary" className="w-full sm:w-auto" onClick={copySession}>
-                    Скопировать сессию
-                  </Button>
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <Button
+                      type="button"
+                      className="w-full sm:w-auto"
+                      onClick={() => {
+                        navPersistedSigRef.current = null;
+                        dispatch({ type: "NAV_BACK_TO_POST_REFLECTION" });
+                      }}
+                    >
+                      Вернуться к итогам супервизии
+                    </Button>
+                    <Button
+                      type="button"
+                      tone="secondary"
+                      className="w-full sm:w-auto"
+                      onClick={() => void copySession()}
+                    >
+                      Скопировать сессию
+                    </Button>
+                  </div>
+                  {sessionCopiedNotice ? (
+                    <p
+                      className="text-xs font-medium text-[color:color-mix(in srgb,var(--accent-green)72%,var(--text))]"
+                      aria-live="polite"
+                    >
+                      Сессия скопирована.
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -2952,7 +3008,7 @@ export default function AssistantPage() {
               <h1 className="text-2xl font-semibold tracking-[-0.03em]">Разбор переписки</h1>
               <div className="max-h-[min(52vh,28rem)] overflow-y-auto overscroll-y-contain rounded-xl border border-[color:var(--border)] bg-[color:color-mix(in srgb, white 88%, transparent)] px-4 py-4">
                 <div className="whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
-                  {session.chatAnalysisResult.trim()}
+                  {stripClinicalMarkdown(session.chatAnalysisResult.trim())}
                 </div>
               </div>
               <div className={assistantStickyBar}>
@@ -2993,18 +3049,33 @@ export default function AssistantPage() {
                 </div>
               )}
               <div className={assistantStickyBar}>
-                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                  <Button
-                    type="button"
-                    className="w-full sm:w-auto"
-                    disabled={caseStartBlocked}
-                    onClick={() => dispatch({ type: "RESET" })}
-                  >
-                    Начать новый кейс
-                  </Button>
-                  <Button type="button" tone="secondary" className="w-full sm:w-auto" onClick={copySession}>
-                    Скопировать сессию
-                  </Button>
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <Button
+                      type="button"
+                      className="w-full sm:w-auto"
+                      disabled={caseStartBlocked}
+                      onClick={() => dispatch({ type: "RESET" })}
+                    >
+                      Начать новый кейс
+                    </Button>
+                    <Button
+                      type="button"
+                      tone="secondary"
+                      className="w-full sm:w-auto"
+                      onClick={() => void copySession()}
+                    >
+                      Скопировать сессию
+                    </Button>
+                  </div>
+                  {sessionCopiedNotice ? (
+                    <p
+                      className="text-xs font-medium text-[color:color-mix(in srgb,var(--accent-green)72%,var(--text))]"
+                      aria-live="polite"
+                    >
+                      Сессия скопирована.
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>
