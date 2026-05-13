@@ -15,12 +15,25 @@ const BodySchema = z.object({
 export async function POST(req: Request) {
   const parsed = BodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
+    if (process.env.NODE_ENV === "development") {
+      console.info("[API_ASSISTANT_DEV] INVALID_BODY", {
+        zodOk: parsed.success,
+      });
+    }
     return NextResponse.json({ ok: false as const, code: "INVALID_BODY" }, { status: 400 });
   }
 
   const auth = await resolveFounderTelemetryAuth();
   const sessionId = crypto.randomUUID();
   const phase = inferAssistantPromptPhase(parsed.data.prompt);
+
+  if (process.env.NODE_ENV === "development") {
+    console.info("[API_ASSISTANT_DEV] request", {
+      phase,
+      promptLength: parsed.data.prompt.length,
+    });
+  }
+
   emitFounderTelemetry(auth, {
     sessionId,
     phase,
@@ -46,6 +59,33 @@ export async function POST(req: Request) {
     errorCode: result.ok ? undefined : result.code,
     latencyMs: Date.now() - t0,
   });
+
+  if (process.env.NODE_ENV === "development") {
+    if (result.ok) {
+      const t = result.text ?? "";
+      console.info("[API_ASSISTANT_DEV] response", {
+        phase,
+        ok: true,
+        code: undefined,
+        textLength: t.length,
+        textEmpty: !t.trim(),
+        responseKeys: ["ok", "text"],
+        latencyMs: Date.now() - t0,
+      });
+    } else {
+      console.info("[API_ASSISTANT_DEV] response", {
+        phase,
+        ok: false,
+        code: result.code,
+        message: result.message,
+        status: "status" in result ? result.status : undefined,
+        retryable: "retryable" in result ? result.retryable : undefined,
+        textEmpty: true,
+        responseKeys: ["ok", "code", "message", "status", "retryable"],
+        latencyMs: Date.now() - t0,
+      });
+    }
+  }
 
   if (!result.ok) {
     const status =

@@ -13,7 +13,7 @@
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon (public) ключ   |
 
 
-Без этих переменных приложение **не падает**: маршруты `/api/persistence/*` возвращают `{ ok: false, code: "SUPABASE_DISABLED" }`, страница `/assistant` показывает мягкое предупреждение и продолжает разбор в сессии.
+Без этих переменных приложение **не падает**: маршруты `/api/persistence/`* возвращают `{ ok: false, code: "SUPABASE_DISABLED" }`, страница `/assistant` показывает мягкое предупреждение и продолжает разбор в сессии.
 
 ## SQL migration
 
@@ -36,7 +36,7 @@
 
 ## Auth
 
-Строки привязаны к `**auth.users.id**` (`user_id uuid`). Пока пользователь **не залогинен** через Supabase Auth в этом же браузере (cookie-сессия для `@supabase/ssr`), API вернёт `{ ok: false, code: "NO_SESSION" }` — это ожидаемо, не ошибка сервера.
+Строки привязаны к `**auth.users.id`** (`user_id uuid`). Пока пользователь **не залогинен** через Supabase Auth в этом же браузере (cookie-сессия для `@supabase/ssr`), API вернёт `{ ok: false, code: "NO_SESSION" }` — это ожидаемо, не ошибка сервера.
 
 ## Поведение API (проверка готовности)
 

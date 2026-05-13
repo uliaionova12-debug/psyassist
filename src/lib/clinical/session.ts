@@ -67,6 +67,11 @@ export type SupervisionStep =
   | "chat_analysis_result"
   | "finished";
 
+/** When true, suppress auth/persistence banners until post-reflection or finished. */
+export function clinicalSessionBlocksAuth(step: SupervisionStep): boolean {
+  return step !== "post_reflection" && step !== "finished";
+}
+
 export type SessionDepth = SessionDepthCallbackKey;
 
 /** Контекст interrupt напряжения — после probe даём гипотезу и только затем двигаем модуль. */
@@ -156,6 +161,8 @@ export interface SupervisionSession {
   tensionPending: TensionPendingState | null;
   tensionStopText: string;
   tensionFlowError: string;
+  /** After first full tension interrupt (hypothesis saved), do not enter tension again this session. */
+  tensionCompleted: boolean;
 
   chatAnalysisFocusKey: ChatFocusPromptKey | null;
   chatAnalysisResult: string;
@@ -212,8 +219,8 @@ export const INITIAL_NAV_FULL_RESET = {
 export const FOCUS_HELP_LABEL = "🎯 Не уверен(а), помоги определить";
 
 export const FOCUS_HELP_NOTICE =
-  "Автоматический выбор фокуса по тексту кейса будет доступен после подключения модели. " +
-  "Сейчас выберите фокус вручную — это сохраняет клиническую точность и ваш контроль над разбором.";
+  "Автоматический выбор фокуса по тексту кейса станет доступен позже. " +
+  "Сейчас выберите фокус вручную — так вы сохраняете клиническую точность и полный контроль над разбором.";
 
 /** Telegram retention_action_keyboard → web */
 export type PostReflectionActionId =
@@ -308,6 +315,7 @@ export const INITIAL_SUPERVISION_SESSION: SupervisionSession = {
   tensionPending: null,
   tensionStopText: "",
   tensionFlowError: "",
+  tensionCompleted: false,
 
   chatAnalysisFocusKey: null,
   chatAnalysisResult: "",
@@ -711,10 +719,13 @@ export function supervisionReducer(
         tensionPending: null,
         tensionStopText: "",
         tensionFlowError: "",
+        tensionCompleted: false,
         step: "question_flow",
       };
 
     case "TENSION_INTERRUPT_START": {
+      if (state.tensionCompleted) return state;
+      if (state.supervisionAnswers.length === 0) return state;
       if (!state.focusKey || !state.sessionDepth) return state;
       const bank = getQuestionsForFocus(state.focusKey);
       const total = getTotalQuestionCount(state.focusKey, state.sessionDepth);
@@ -724,8 +735,19 @@ export function supervisionReducer(
       if (!questionText) return state;
       const answerText = state.draftInput.trim();
       if (!answerText) return state;
+      const bankedAnswers: SupervisionAnswer[] = [
+        ...state.supervisionAnswers,
+        {
+          module: `Вопрос ${idx + 1}`,
+          question: questionText,
+          answer: answerText,
+        },
+      ];
+      const nextIdx = idx + 1;
       return {
         ...state,
+        supervisionAnswers: bankedAnswers,
+        questionModuleIdx: nextIdx,
         tensionPending: {
           moduleIdx: idx,
           moduleNum: idx + 1,
@@ -749,9 +771,24 @@ export function supervisionReducer(
       };
 
     case "TENSION_STOP_FAILURE": {
-      const restoreDraft = state.tensionPending?.originalAnswer ?? "";
+      const pending = state.tensionPending;
+      const restoreDraft = pending?.originalAnswer ?? "";
+      if (!pending) {
+        return {
+          ...state,
+          tensionPending: null,
+          tensionStopText: "",
+          draftInput: restoreDraft,
+          tensionFlowError: action.message,
+          step: "question_flow",
+        };
+      }
+      const patchIdx = pending.moduleIdx;
+      const rolledBackAnswers = state.supervisionAnswers.filter((_, i) => i !== patchIdx);
       return {
         ...state,
+        supervisionAnswers: rolledBackAnswers,
+        questionModuleIdx: patchIdx,
         tensionPending: null,
         tensionStopText: "",
         draftInput: restoreDraft,
@@ -780,17 +817,20 @@ export function supervisionReducer(
       if (!state.focusKey || !state.sessionDepth) return state;
 
       const combinedAnswer = `${pending.originalAnswer}\n\n[Уточнение]\n${pending.probeAnswer}`;
-      const nextAnswers: SupervisionAnswer[] = [
-        ...state.supervisionAnswers,
-        {
-          module: `Вопрос ${pending.moduleNum}`,
-          question: pending.moduleQuestion,
-          answer: combinedAnswer,
-          analysis: action.analysis.trim(),
-        },
-      ];
+      const patchIdx = pending.moduleIdx;
+      const existing = state.supervisionAnswers[patchIdx];
+      if (!existing) return state;
 
-      const nextIdx = pending.moduleIdx + 1;
+      const nextAnswers: SupervisionAnswer[] = [...state.supervisionAnswers];
+      nextAnswers[patchIdx] = {
+        ...existing,
+        module: `Вопрос ${pending.moduleNum}`,
+        question: pending.moduleQuestion,
+        answer: combinedAnswer,
+        analysis: action.analysis.trim(),
+      };
+
+      const nextIdx = state.questionModuleIdx;
       const total = getTotalQuestionCount(state.focusKey, state.sessionDepth);
 
       const clearedTension = {
@@ -803,6 +843,7 @@ export function supervisionReducer(
         return {
           ...state,
           ...clearedTension,
+          tensionCompleted: true,
           supervisionAnswers: nextAnswers,
           questionModuleIdx: nextIdx,
           draftInput: "",
@@ -817,6 +858,7 @@ export function supervisionReducer(
       return {
         ...state,
         ...clearedTension,
+        tensionCompleted: true,
         supervisionAnswers: nextAnswers,
         questionModuleIdx: nextIdx,
         draftInput: "",
@@ -834,9 +876,24 @@ export function supervisionReducer(
       };
 
     case "TENSION_FLOW_CANCEL": {
-      const restore = state.tensionPending?.originalAnswer ?? "";
+      const pending = state.tensionPending;
+      const restore = pending?.originalAnswer ?? "";
+      if (!pending) {
+        return {
+          ...state,
+          tensionPending: null,
+          tensionStopText: "",
+          tensionFlowError: "",
+          draftInput: restore,
+          step: "question_flow",
+        };
+      }
+      const patchIdx = pending.moduleIdx;
+      const rolledBackAnswers = state.supervisionAnswers.filter((_, i) => i !== patchIdx);
       return {
         ...state,
+        supervisionAnswers: rolledBackAnswers,
+        questionModuleIdx: patchIdx,
         tensionPending: null,
         tensionStopText: "",
         tensionFlowError: "",
@@ -1112,6 +1169,7 @@ export function supervisionReducer(
         tensionPending: null,
         tensionStopText: "",
         tensionFlowError: "",
+        tensionCompleted: false,
         chatAnalysisFocusKey: null,
         chatAnalysisResult: "",
         chatAnalysisError: "",

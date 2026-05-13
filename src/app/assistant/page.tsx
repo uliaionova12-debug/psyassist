@@ -560,6 +560,9 @@ export default function AssistantPage() {
         }
       }
 
+      if (action.type === "TENSION_INTERRUPT_START" && s.tensionCompleted) {
+        return;
+      }
       if (action.type === "TENSION_INTERRUPT_START") {
         void trackEvent({
           eventName: PRODUCT_EVENTS.tension_detected,
@@ -980,10 +983,7 @@ export default function AssistantPage() {
           return;
         }
 
-        setNavFlowError(
-          data.message ??
-            "Не удалось загрузить данные. Попробуйте обновить страницу."
-        );
+        setNavFlowError("Не удалось загрузить данные. Попробуйте обновить страницу.");
         rawDispatch({ type: "NAV_ABORT_TO_POST_REFLECTION" });
       } catch {
         setNavFlowError("Не удалось загрузить данные. Попробуйте обновить страницу.");
@@ -1046,9 +1046,7 @@ export default function AssistantPage() {
 
         rawDispatch({
           type: "NAV_FINAL_ANALYSIS_FAILED",
-          message:
-            data.message ??
-            "Не удалось загрузить данные. Попробуйте обновить страницу.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch {
         rawDispatch({
@@ -1121,6 +1119,8 @@ export default function AssistantPage() {
 
   const detectionKeyRef = useRef<string | null>(null);
   const reflectionKeyRef = useRef<string | null>(null);
+  /** Bumps when a new integration reflection fetch starts; stale completions must not dispatch. */
+  const integrationReflectionFetchGenRef = useRef(0);
   const closingIntegrationKeyRef = useRef<string | null>(null);
 
   const runDetection = useCallback(async () => {
@@ -1195,6 +1195,8 @@ export default function AssistantPage() {
     if (reflectionKeyRef.current === sig) return;
     reflectionKeyRef.current = sig;
 
+    const fetchGen = ++integrationReflectionFetchGenRef.current;
+
     void (async () => {
       try {
         const res = await fetch("/api/assistant", {
@@ -1202,6 +1204,8 @@ export default function AssistantPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt }),
         });
+        if (fetchGen !== integrationReflectionFetchGenRef.current) return;
+
         const data = (await res.json()) as {
           ok?: boolean;
           text?: string;
@@ -1211,22 +1215,82 @@ export default function AssistantPage() {
           retryable?: boolean;
         };
 
+        const rawText = data.text;
+        const responseKeys =
+          data && typeof data === "object" ? Object.keys(data as Record<string, unknown>) : [];
+
+        if (process.env.NODE_ENV === "development") {
+          console.info("[INTEGRATION_REFLECTION_DEV] response parsed (browser console)", {
+            path: "/api/assistant",
+            httpStatus: res.status,
+            ok: data.ok,
+            code: data.code,
+            message: data.message,
+            dataStatus: data.status,
+            retryable: data.retryable,
+            responseKeys,
+            textTruthy: Boolean(rawText),
+            textEmpty: !rawText?.trim(),
+            textLength: rawText?.length ?? 0,
+            textHead: typeof rawText === "string" ? rawText.slice(0, 160) : undefined,
+          });
+        }
+
+        if (fetchGen !== integrationReflectionFetchGenRef.current) return;
+
         if (data.ok && data.text) {
           setReflectionOverloadRetry(false);
           dispatch({ type: "REFLECTION_SUCCESS", text: stripClinicalMarkdown(data.text) });
           return;
         }
 
-        setReflectionOverloadRetry(
-          data.status === "temporary_ai_overload" && Boolean(data.retryable)
-        );
+        const isIntegrationOverload =
+          data.code === "TEMPORARY_AI_OVERLOAD" || data.retryable === true;
+
+        if (isIntegrationOverload) {
+          if (process.env.NODE_ENV === "development") {
+            console.info("[INTEGRATION_REFLECTION_DEV] overload hold — no REFLECTION_ERROR", {
+              code: data.code,
+              retryable: data.retryable,
+            });
+          }
+          setReflectionOverloadRetry(true);
+          return;
+        }
+
+        if (process.env.NODE_ENV === "development") {
+          console.info(
+            "[INTEGRATION_REFLECTION_DEV] REFLECTION_ERROR dispatch next (browser console)",
+            {
+              reason:
+                !data.ok
+                  ? "ok_false_or_missing"
+                  : !data.text
+                    ? "text_falsy"
+                    : "text_empty_after_trim_implied",
+              httpStatus: res.status,
+              ok: data.ok,
+              code: data.code,
+              message: data.message,
+              responseKeys,
+              textLength: rawText?.length ?? 0,
+              textEmpty: !rawText?.trim(),
+            }
+          );
+        }
+
+        setReflectionOverloadRetry(false);
         dispatch({
           type: "REFLECTION_ERROR",
           message:
-            data.message ??
             "Не удалось загрузить данные. Ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
-      } catch {
+      } catch (e: unknown) {
+        if (fetchGen !== integrationReflectionFetchGenRef.current) return;
+
+        if (process.env.NODE_ENV === "development") {
+          console.info("[INTEGRATION_REFLECTION_DEV] request failed", e);
+        }
         setReflectionOverloadRetry(false);
         dispatch({
           type: "REFLECTION_ERROR",
@@ -1235,7 +1299,7 @@ export default function AssistantPage() {
         });
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- узкий перечень без полного session (лишние вызовы модели)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- узкий перечень без полного session (лишние вызовы модели); reflectionOverloadRetry: иначе «Повторить» не перезапускает fetch при том же reflectionStatus=loading
   }, [
     session.step,
     session.reflectionStatus,
@@ -1250,6 +1314,7 @@ export default function AssistantPage() {
     session.therapistOtherMethods,
     session.supervisorStyle,
     session.focusLabel,
+    reflectionOverloadRetry,
     dispatch,
   ]);
 
@@ -1271,6 +1336,22 @@ export default function AssistantPage() {
       return;
     }
 
+    const narrative = session.fullNarrative.trim();
+    const reflection = session.reflectionText.trim();
+    const bankBlock = session.supervisionAnswers
+      .map((a) => {
+        const body = a.analysis?.trim()
+          ? `${a.answer}\n\n[Рабочая гипотеза после уточнения напряжения]\n${a.analysis.trim()}`
+          : a.answer;
+        return `${a.module}. ${a.question}\nОтвет: ${body}`;
+      })
+      .join("\n\n");
+
+    const grounding =
+      (narrative ? `Контекст кейса (материал сессии):\n${narrative}\n\n` : "") +
+      (reflection ? `Интеграционная рефлексия по разбору:\n${reflection}\n\n` : "") +
+      (bankBlock ? `Вопросы модуля и ответы терапевта:\n${bankBlock}\n\n` : "");
+
     const prompt =
       "Сформируй персональный интеграционный блок для терапевта.\n\n" +
       "Формат строго:\n" +
@@ -1279,11 +1360,12 @@ export default function AssistantPage() {
       "- Эмоционально интеллигентно, клинически корректно.\n" +
       "- Упомяни: исходный запрос терапевта, слепые зоны, поле терапевта, ближайшее направление.\n" +
       "- Без списков, без заголовков, без кавычек, без эмодзи.\n\n" +
+      grounding +
       `Исходный запрос в супервизию:\n${req}\n\n` +
       `Удалось ли приблизиться к ответу:\n${s1}\n\n` +
       `Что терапевт забирает в практику:\n${takeaway}\n`;
 
-    const sig = `${prompt.length}:${req}:${s1}:${takeaway}:${session.therapistSpecializations.join("|")}:${session.therapistMethods.join("|")}:${session.therapistOtherSpecialization}:${session.therapistOtherMethods}:${session.supervisorStyle ?? ""}:${session.focusLabel ?? ""}`;
+    const sig = `${prompt.length}:${req}:${s1}:${takeaway}:${narrative.length}:${reflection.length}:${session.supervisionAnswers.length}:${bankBlock.length}:${session.therapistSpecializations.join("|")}:${session.therapistMethods.join("|")}:${session.therapistOtherSpecialization}:${session.therapistOtherMethods}:${session.supervisorStyle ?? ""}:${session.focusLabel ?? ""}`;
     if (closingIntegrationKeyRef.current === sig) return;
     closingIntegrationKeyRef.current = sig;
 
@@ -1320,7 +1402,6 @@ export default function AssistantPage() {
         dispatch({
           type: "CLOSING_INTEGRATION_ERROR",
           message:
-            data?.message ??
             "Не удалось загрузить данные. Ваши ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       } catch {
@@ -1338,6 +1419,9 @@ export default function AssistantPage() {
     session.supervisionRequest,
     session.closingStep1Answer,
     session.closingTherapistTakeaway,
+    session.fullNarrative,
+    session.reflectionText,
+    session.supervisionAnswers,
     session.therapistSpecializations,
     session.therapistMethods,
     session.therapistOtherSpecialization,
@@ -1439,9 +1523,7 @@ export default function AssistantPage() {
         console.info("[TENSION] reducer advance TENSION_STOP_FAILURE (response)");
         dispatch({
           type: "TENSION_STOP_FAILURE",
-          message:
-            data.message ??
-            "Не удалось загрузить данные. Попробуйте обновить страницу.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch (err) {
         if (ac.signal.aborted) {
@@ -1519,9 +1601,7 @@ export default function AssistantPage() {
         console.info("[TENSION] reducer advance TENSION_HYPOTHESIS_FAILURE (response)");
         dispatch({
           type: "TENSION_HYPOTHESIS_FAILURE",
-          message:
-            data.message ??
-            "Не удалось загрузить данные. Попробуйте обновить страницу.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch (err) {
         if (ac.signal.aborted) {
@@ -1593,9 +1673,7 @@ export default function AssistantPage() {
         }
         dispatch({
           type: "CHAT_ANALYSIS_FAILURE",
-          message:
-            data.message ??
-            "Не удалось загрузить данные. Попробуйте обновить страницу.",
+          message: "Не удалось загрузить данные. Попробуйте обновить страницу.",
         });
       } catch {
         dispatch({
@@ -1632,7 +1710,14 @@ export default function AssistantPage() {
   const submitQuestionBankAnswer = () => {
     const text = session.draftInput.trim();
     if (!text || !session.focusKey || !session.sessionDepth) return;
-    if (detect_tension_signals(text)) {
+    const bankTotal = getTotalQuestionCount(session.focusKey, session.sessionDepth);
+    const hasNextBankQuestion = session.questionModuleIdx + 1 < bankTotal;
+    if (
+      session.supervisionAnswers.length > 0 &&
+      !session.tensionCompleted &&
+      hasNextBankQuestion &&
+      detect_tension_signals(text)
+    ) {
       dispatch({ type: "TENSION_INTERRUPT_START" });
       return;
     }
@@ -2324,7 +2409,7 @@ export default function AssistantPage() {
                 Стоп · Не спешим · Сейчас про вас · Сейчас важнее не клиент.
               </p>
               <p className="text-xs leading-relaxed text-[color:var(--muted)]">
-                Варианты для шага остановки ассистент подберёт по инструкции: {TENSION_STOP_STEP_ONE_OPTIONS}
+                Короткие ориентиры для фразы остановки: {TENSION_STOP_STEP_ONE_OPTIONS}
               </p>
               <p className="text-sm leading-relaxed text-[color:var(--muted)]">
                 Готовлю уточняющий контакт и один вопрос…
@@ -2377,7 +2462,7 @@ export default function AssistantPage() {
                     className="w-full sm:w-auto"
                     onClick={() => dispatch({ type: "TENSION_FLOW_CANCEL" })}
                   >
-                    Вернуться к ответу на модуль без interrupt
+                    Вернуться к ответу на модуль без короткой остановки
                   </Button>
                 </div>
               </div>
@@ -2393,16 +2478,46 @@ export default function AssistantPage() {
             </div>
           )}
 
-          {session.step === "integration_reflection" && session.reflectionStatus === "loading" && (
-            <div className="space-y-4">
-              <h1 className="text-2xl font-semibold tracking-[-0.03em]">
-                Интеграционная рефлексия
-              </h1>
-              <p className="text-sm leading-relaxed text-[color:var(--muted)]">
-                Завершаю супервизию. Формирую интеграционную рефлексию...
-              </p>
-            </div>
-          )}
+          {session.step === "integration_reflection" &&
+            session.reflectionStatus === "loading" &&
+            reflectionOverloadRetry && (
+              <div className="space-y-4">
+                <h1 className="text-2xl font-semibold tracking-[-0.03em]">
+                  Интеграционная рефлексия
+                </h1>
+                <p className="text-sm leading-relaxed text-[color:var(--muted)]">
+                  AI сейчас под высокой клинической нагрузкой. Ваш кейс удержан. Повторим через несколько
+                  секунд.
+                </p>
+                <div className="mt-2">
+                  <Button
+                    type="button"
+                    tone="secondary"
+                    className="w-full sm:w-auto"
+                    onClick={() => {
+                      setReflectionOverloadRetry(false);
+                      reflectionKeyRef.current = null;
+                      dispatch({ type: "REFLECTION_LOADING" });
+                    }}
+                  >
+                    Повторить
+                  </Button>
+                </div>
+              </div>
+            )}
+
+          {session.step === "integration_reflection" &&
+            session.reflectionStatus === "loading" &&
+            !reflectionOverloadRetry && (
+              <div className="space-y-4">
+                <h1 className="text-2xl font-semibold tracking-[-0.03em]">
+                  Интеграционная рефлексия
+                </h1>
+                <p className="text-sm leading-relaxed text-[color:var(--muted)]">
+                  Завершаю супервизию. Формирую интеграционную рефлексию...
+                </p>
+              </div>
+            )}
 
           {session.step === "closing_step1" && (
             <div className="space-y-6">

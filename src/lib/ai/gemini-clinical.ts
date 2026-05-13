@@ -1,10 +1,12 @@
 import {
   GoogleGenerativeAI,
   GoogleGenerativeAIFetchError,
+  GoogleGenerativeAIResponseError,
   type Part,
 } from "@google/generative-ai";
 
 import { getGeminiRuntimeApiKey } from "@/lib/ai/gemini-runtime-key";
+import { completionOpenAiClinicalFallback } from "@/lib/ai/openai-clinical-fallback";
 import { stripClinicalMarkdown } from "@/lib/clinical/markdown-strip";
 import { SUPERVISION_OVERRIDE } from "@/lib/clinical/reflection";
 import { emitFounderTelemetry, type FounderGeminiTelemetryOptions } from "@/lib/telemetry/founder";
@@ -129,6 +131,58 @@ function isRetryableGeminiStatus(status: number | null): boolean {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 }
 
+function geminiUpstreamErrorBody(err: unknown): unknown {
+  if (err instanceof GoogleGenerativeAIFetchError) {
+    return {
+      message: err.message,
+      statusText: err.statusText,
+      errorDetails: err.errorDetails,
+    };
+  }
+  if (err instanceof GoogleGenerativeAIResponseError) {
+    return {
+      message: err.message,
+      response: err.response,
+    };
+  }
+  return err;
+}
+
+function buildGeminiDiagnosticLower(err: unknown): string {
+  try {
+    const body = geminiUpstreamErrorBody(err);
+    const base = err instanceof Error ? `${err.message} ` : "";
+    const serialized =
+      typeof body === "object" && body !== null ? JSON.stringify(body) : String(body);
+    return `${base}${serialized}`.toLowerCase();
+  } catch {
+    return String(err ?? "").toLowerCase();
+  }
+}
+
+function shouldLogGeminiRawError(err: unknown, httpStatus: number | null): boolean {
+  if (process.env.NODE_ENV !== "development") return false;
+  if (err instanceof GoogleGenerativeAIFetchError || err instanceof GoogleGenerativeAIResponseError)
+    return true;
+  return typeof httpStatus === "number" && httpStatus >= 400;
+}
+
+function resolveGeminiLogStatus(err: unknown, extracted: number | null): number | undefined {
+  if (typeof extracted === "number") return extracted;
+  if (err instanceof GoogleGenerativeAIFetchError && typeof err.status === "number") return err.status;
+  return undefined;
+}
+
+function logGeminiRawErrorDev(args: {
+  status: number | undefined;
+  body: unknown;
+  model: string | undefined;
+  attempt: number | undefined;
+}): void {
+  if (process.env.NODE_ENV !== "development") return;
+  console.log("[GEMINI_RAW_ERROR]", args);
+}
+
 function buildModelFallbackOrder(primaryModel: string): string[] {
   const trimmed = primaryModel.trim();
   const order: string[] = [];
@@ -139,15 +193,37 @@ function buildModelFallbackOrder(primaryModel: string): string[] {
   return order;
 }
 
+type GeminiResilienceFailureMeta = { httpStatus: number | null; diagnosticLower: string };
+
+type GenerateContentResilienceResult =
+  | { ok: true; text: string }
+  | ({
+      ok: false;
+      code: "MODEL_ERROR" | "NETWORK_ERROR";
+      message?: string;
+      status?: "temporary_ai_overload";
+      retryable?: true;
+    } & { _gemini: GeminiResilienceFailureMeta });
+
+function openAiShouldFallbackFromGeminiFailure(
+  r: Extract<GenerateContentResilienceResult, { ok: false }>
+): boolean {
+  if (r.status === "temporary_ai_overload" && r.retryable) return true;
+  const { httpStatus, diagnosticLower } = r._gemini;
+  if (httpStatus === 429) return true;
+  if (httpStatus === 400) {
+    const d = diagnosticLower;
+    if (d.includes("user location is not supported") || d.includes("location")) return true;
+  }
+  return false;
+}
+
 async function generateContentWithResilience(args: {
   apiKey: string;
   systemInstruction: string;
   userParts: Part[];
   telemetry?: FounderGeminiTelemetryOptions;
-}): Promise<
-  | { ok: true; text: string }
-  | ({ ok: false; code: "MODEL_ERROR" | "NETWORK_ERROR" } & Partial<TemporaryAiOverload> & { message?: string })
-> {
+}): Promise<GenerateContentResilienceResult> {
   const { apiKey, systemInstruction, userParts, telemetry } = args;
   const rootOpts = sdkRootRequestOptions();
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -189,6 +265,14 @@ async function generateContentWithResilience(args: {
       } catch (e) {
         lastErr = e;
         lastStatus = extractHttpStatus(e);
+        if (shouldLogGeminiRawError(e, lastStatus)) {
+          logGeminiRawErrorDev({
+            status: resolveGeminiLogStatus(e, lastStatus),
+            body: geminiUpstreamErrorBody(e),
+            model: modelName,
+            attempt,
+          });
+        }
         const attemptLatencyMs = Date.now() - attemptStart;
 
         const msg = e instanceof Error ? e.message : String(e);
@@ -250,7 +334,15 @@ async function generateContentWithResilience(args: {
         latencyMs: Date.now() - resilienceStarted,
       });
     }
-    return { ok: false, code: "MODEL_ERROR", ...TEMPORARY_AI_OVERLOAD };
+    return {
+      ok: false,
+      code: "MODEL_ERROR",
+      ...TEMPORARY_AI_OVERLOAD,
+      _gemini: {
+        httpStatus: lastStatus,
+        diagnosticLower: buildGeminiDiagnosticLower(lastErr),
+      },
+    };
   }
 
   const msg = lastErr instanceof Error ? lastErr.message : String(lastErr ?? "");
@@ -259,6 +351,10 @@ async function generateContentWithResilience(args: {
       ok: false,
       code: "NETWORK_ERROR",
       message: userFacingLoadFailure(),
+      _gemini: {
+        httpStatus: lastStatus,
+        diagnosticLower: buildGeminiDiagnosticLower(lastErr),
+      },
     };
   }
 
@@ -267,6 +363,10 @@ async function generateContentWithResilience(args: {
       ok: false,
       code: "MODEL_ERROR",
       message: userFacingLoadFailure(),
+      _gemini: {
+        httpStatus: lastStatus,
+        diagnosticLower: buildGeminiDiagnosticLower(lastErr),
+      },
     };
   }
 
@@ -274,6 +374,10 @@ async function generateContentWithResilience(args: {
     ok: false,
     code: "NETWORK_ERROR",
     message: userFacingLoadFailure(),
+    _gemini: {
+      httpStatus: lastStatus,
+      diagnosticLower: buildGeminiDiagnosticLower(lastErr),
+    },
   };
 }
 
@@ -291,24 +395,38 @@ async function generateWithSdk(
     const r = await generateContentWithResilience({ apiKey, systemInstruction, userParts, telemetry });
     const text = r.ok ? r.text.trim() : "";
 
-    if (!text) {
-      if (!r.ok && r.status === "temporary_ai_overload" && r.retryable) {
-        return {
-          ok: false,
-          code: "TEMPORARY_AI_OVERLOAD",
-          status: "temporary_ai_overload",
-          retryable: true,
-          message: r.message,
-        };
-      }
-      return {
-        ok: false,
-        code: "EMPTY_MODEL_OUTPUT",
-        message: "Не удалось получить ответ. Попробуйте повторить запрос позже.",
-      };
+    if (text) {
+      return { ok: true, text: stripClinicalMarkdown(text) };
     }
 
-    return { ok: true, text: stripClinicalMarkdown(text) };
+    const openAiKey = (process.env.OPENAI_API_KEY ?? "").trim();
+    if (!r.ok && openAiKey && openAiShouldFallbackFromGeminiFailure(r)) {
+      const fr = await completionOpenAiClinicalFallback({
+        apiKey: openAiKey,
+        systemInstruction,
+        userParts,
+        phase: telemetry?.phase,
+        step: telemetry?.step,
+      });
+      if (fr.ok && fr.text.trim()) {
+        return { ok: true, text: stripClinicalMarkdown(fr.text.trim()) };
+      }
+    }
+
+    if (!r.ok && r.status === "temporary_ai_overload" && r.retryable) {
+      return {
+        ok: false,
+        code: "TEMPORARY_AI_OVERLOAD",
+        status: "temporary_ai_overload",
+        retryable: true,
+        message: r.message,
+      };
+    }
+    return {
+      ok: false,
+      code: "EMPTY_MODEL_OUTPUT",
+      message: "Не удалось получить ответ. Попробуйте повторить запрос позже.",
+    };
   } catch {
     return { ok: false, code: "NETWORK_ERROR", message: userFacingLoadFailure() };
   }
@@ -360,6 +478,15 @@ export async function runGeminiTransportHealthCheck(): Promise<{ ok: boolean; de
     const text = result.response.text().trim();
     return { ok: /\bOK\b/i.test(text), detail: text.slice(0, 120) };
   } catch (e) {
+    const httpStatus = extractHttpStatus(e);
+    if (shouldLogGeminiRawError(e, httpStatus)) {
+      logGeminiRawErrorDev({
+        status: resolveGeminiLogStatus(e, httpStatus),
+        body: geminiUpstreamErrorBody(e),
+        model: GEMINI_MODEL,
+        attempt: 1,
+      });
+    }
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
 }
