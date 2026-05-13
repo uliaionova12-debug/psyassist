@@ -1,3 +1,5 @@
+> **FROZEN** as of beta-green-run-1 (commit `449ab661f092101bb9f56d4a0db98f5b7c2183d4`) — green run lock; changes require explicit unlock.
+
 # Clinical flow contract (frozen)
 
 This document describes the **intended end-to-end supervision journey** in PsyAssist. Step **names in bold** are product-language labels; **code step** is `SupervisionSession.step` in `src/lib/clinical/session.ts` where applicable.
