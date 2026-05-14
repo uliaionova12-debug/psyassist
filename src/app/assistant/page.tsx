@@ -616,14 +616,26 @@ export default function AssistantPage() {
         if (r.ok) {
           setFinishSaveStatus("success");
           preFinishSessionRef.current = null;
+          const bp = billingProfileRef.current;
+          if (bp.planType === "free" && !bp.freeIntroUsed) {
+            freeIntroCompleteTrackedRef.current = true;
+            persistBilling({ ...bp, freeIntroUsed: true });
+            void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
+          }
         } else {
           setFinishSaveStatus("error");
         }
       });
     } else {
       setFinishSaveStatus("skipped");
+      const bp = billingProfileRef.current;
+      if (rid == null && bp.planType === "free" && !bp.freeIntroUsed) {
+        freeIntroCompleteTrackedRef.current = true;
+        persistBilling({ ...bp, freeIntroUsed: true });
+        void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
+      }
     }
-  }, [session.step, authUser?.id, session.remoteCaseId]);
+  }, [session.step, authUser?.id, session.remoteCaseId, persistBilling]);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -835,11 +847,15 @@ export default function AssistantPage() {
     }
     const bp = billingProfileRef.current;
     if (bp.planType !== "free" || bp.freeIntroUsed || freeIntroCompleteTrackedRef.current) return;
+    /* Logged-in users: mark intro consumed only after case is saved to «Мои случаи» (see finished
+     * effect + persistence_complete_case_session). Setting freeIntroUsed here persisted to the
+     * server before POST /complete, so canStartCase became false and case_reminder showed pricing. */
+    if (authUser) return;
     freeIntroCompleteTrackedRef.current = true;
     const next = { ...bp, freeIntroUsed: true };
     persistBilling(next);
     void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
-  }, [session.step, session.reflectionStatus, session.reflectionText, persistBilling]);
+  }, [session.step, session.reflectionStatus, session.reflectionText, persistBilling, authUser]);
 
   useEffect(() => {
     if (session.step !== "post_reflection" || session.reflectionStatus !== "success") return;
@@ -3495,7 +3511,10 @@ export default function AssistantPage() {
                     <Button
                       type="button"
                       className="w-full sm:w-auto"
-                      disabled={caseStartBlocked}
+                      disabled={
+                        caseStartBlocked ||
+                        Boolean(authUser && finishSaveStatus === "saving")
+                      }
                       onClick={() => dispatch({ type: "RESET" })}
                     >
                       Начать новый кейс
