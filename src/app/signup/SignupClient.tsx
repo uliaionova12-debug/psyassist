@@ -8,21 +8,15 @@ import { AuthVaultPlaceholder } from "@/components/auth/AuthVaultPlaceholder";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/ui/Container";
+import { buildAuthCallbackAbsoluteUrl } from "@/lib/auth/redirect-urls";
 import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
-
-function redirectUri(nextPath: string): string {
-  const base =
-    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ||
-    (typeof window !== "undefined" ? window.location.origin : "");
-  return `${base}/auth/callback?next=${encodeURIComponent(nextPath)}`;
-}
 
 export function SignupClient() {
   const router = useRouter();
   const params = useSearchParams();
   const nextPath = useMemo(() => {
     const n = params.get("next");
-    return n?.startsWith("/") ? n : "/dashboard";
+    return n?.startsWith("/") ? n : "/assistant";
   }, [params]);
 
   const supabase = useMemo(() => createSupabaseBrowserClientOptional(), []);
@@ -45,7 +39,7 @@ export function SignupClient() {
       email: email.trim(),
       password,
       options: {
-        emailRedirectTo: redirectUri(nextPath),
+        emailRedirectTo: buildAuthCallbackAbsoluteUrl(nextPath),
       },
     });
     setBusy(false);
@@ -67,7 +61,7 @@ export function SignupClient() {
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       options: {
-        emailRedirectTo: redirectUri(nextPath),
+        emailRedirectTo: buildAuthCallbackAbsoluteUrl(nextPath),
       },
     });
     setBusy(false);

@@ -7,6 +7,7 @@
     "dev": "WATCHPACK_POLLING=true next dev --turbopack --hostname 127.0.0.1 --port 3001",
     "build": "next build",
     "start": "next start",
+    "test:auth": "node --import tsx --test src/lib/auth/redirect-urls.test.ts",
     "lint": "next lint",
     "format": "prettier --write .",
     "extract:raw-text": "node --import tsx scripts/extract-raw-text.ts",

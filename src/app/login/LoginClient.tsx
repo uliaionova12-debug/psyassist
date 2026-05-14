@@ -8,19 +8,15 @@ import { AuthVaultPlaceholder } from "@/components/auth/AuthVaultPlaceholder";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/ui/Container";
+import { buildAuthCallbackAbsoluteUrl } from "@/lib/auth/redirect-urls";
 import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
-
-function redirectUri(nextPath: string): string {
-  const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || window.location.origin;
-  return `${base}/auth/callback?next=${encodeURIComponent(nextPath)}`;
-}
 
 export function LoginClient() {
   const router = useRouter();
   const params = useSearchParams();
   const nextPath = useMemo(() => {
     const n = params.get("next");
-    return n?.startsWith("/") ? n : "/dashboard";
+    return n?.startsWith("/") ? n : "/assistant";
   }, [params]);
 
   const err = params.get("error");
@@ -59,7 +55,7 @@ export function LoginClient() {
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       options: {
-        emailRedirectTo: redirectUri(nextPath),
+        emailRedirectTo: buildAuthCallbackAbsoluteUrl(nextPath),
       },
     });
     setBusy(false);
@@ -83,7 +79,9 @@ export function LoginClient() {
 
           {err && (
             <p className="rounded-xl border border-[color:color-mix(in srgb, var(--accent-sand) 45%, var(--border))] bg-[color:color-mix(in srgb, var(--accent-sand) 10%, white)] px-4 py-3 text-sm text-[color:var(--muted)]">
-              Не удалось завершить вход. Попробуйте ещё раз или обратитесь в поддержку.
+              {err === "supabase_disabled"
+                ? "Сервер авторизации не настроен (нет переменных окружения). Обратитесь к администратору."
+                : "Не удалось завершить вход. Попробуйте ещё раз или обратитесь в поддержку."}
             </p>
           )}
 

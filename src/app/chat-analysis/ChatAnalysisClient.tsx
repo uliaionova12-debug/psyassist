@@ -1,5 +1,6 @@
 "use client";
 
+import type { AuthChangeEvent } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -113,10 +114,14 @@ export function ChatAnalysisClient() {
             if (body?.ok && body.billing) {
               saveBillingProfile(body.billing);
               setBillingProfile(body.billing);
+            } else {
+              setBillingProfile(DEFAULT_BILLING_PROFILE);
             }
             if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
           })
-          .catch(() => {});
+          .catch(() => {
+            setBillingProfile(DEFAULT_BILLING_PROFILE);
+          });
       } else {
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
@@ -124,7 +129,7 @@ export function ChatAnalysisClient() {
       setAuthReady(true);
     });
 
-    const { data } = client.auth.onAuthStateChange((_e, session) => {
+    const { data } = client.auth.onAuthStateChange((event: AuthChangeEvent, session) => {
       const u = session?.user;
       setAuthUser(u ? { id: u.id } : null);
       if (u) {
@@ -134,11 +139,15 @@ export function ChatAnalysisClient() {
             if (body?.ok && body.billing) {
               saveBillingProfile(body.billing);
               setBillingProfile(body.billing);
+            } else {
+              setBillingProfile(DEFAULT_BILLING_PROFILE);
             }
             if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
           })
-          .catch(() => {});
-      } else {
+          .catch(() => {
+            setBillingProfile(DEFAULT_BILLING_PROFILE);
+          });
+      } else if (event === "SIGNED_OUT") {
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
       }

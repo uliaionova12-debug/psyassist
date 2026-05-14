@@ -58,6 +58,9 @@ export default async function DashboardPage() {
   const profileRow = loaded.ok ? loaded.row : null;
   const profile = profileRow ? rowToUserProfile(profileRow) : null;
   const billing = profileRow ? profileRowToBilling(profileRow) : null;
+  if (billing?.planType === "free" && !billing.freeIntroUsed) {
+    redirect("/assistant");
+  }
   const entitlements = billing ? deriveEntitlements(billing) : null;
 
   const { data: progressRow } = await supabase

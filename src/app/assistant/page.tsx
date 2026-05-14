@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { _CHAT_FOCUS_PROMPTS, type ChatFocusPromptKey } from "@/lib/clinical/chat-analysis";
 
@@ -83,6 +83,11 @@ import {
   flushPendingCaseAppends,
   syncAssistantCaseInitialState,
 } from "@/lib/persistence/assistant-reducer";
+import {
+  clearAssistantSessionSnapshot,
+  readAssistantSessionSnapshotForInit,
+  saveAssistantSessionSnapshot,
+} from "@/lib/persistence/assistant-session-snapshot";
 import { useCasePersistenceAuth } from "@/components/auth/CasePersistenceAuthProvider";
 import { CasePurchasePaywall } from "@/components/billing/CasePurchasePaywall";
 import { FreeIntroPaywall } from "@/components/billing/FreeIntroPaywall";
@@ -91,6 +96,8 @@ import { SubscriptionPaywall } from "@/components/billing/SubscriptionPaywall";
 import { SupervisionTrustBlock } from "@/components/billing/SupervisionTrustBlock";
 import { PRODUCT_EVENTS } from "@/lib/analytics/constants";
 import { trackEvent } from "@/lib/analytics/events";
+import type { AuthChangeEvent } from "@supabase/supabase-js";
+
 import type { PlanType, UserBillingProfile } from "@/lib/billing/billing-types";
 import { tryConsumeCaseStart } from "@/lib/billing/credits";
 import {
@@ -128,6 +135,17 @@ const choiceRow =
 
 const choiceRowSelected =
   "border-[color:color-mix(in srgb, var(--accent-green) 45%, var(--border))] bg-[color:color-mix(in srgb, var(--accent-green) 10%, white)]";
+
+type SnapshotRestoreAction = { type: "__PSYASSIST_RESTORE__"; payload: SupervisionSession };
+
+function withSnapshotRestore(
+  inner: (state: SupervisionSession, action: SupervisionAction) => SupervisionSession
+) {
+  return (state: SupervisionSession, action: SupervisionAction | SnapshotRestoreAction): SupervisionSession => {
+    if (action.type === "__PSYASSIST_RESTORE__") return action.payload;
+    return inner(state, action);
+  };
+}
 
 function buildPreviousModulesContext(answers: SupervisionAnswer[]): string {
   if (!answers.length) return "";
@@ -313,10 +331,14 @@ export default function AssistantPage() {
             if (body?.ok && body.billing) {
               saveBillingProfile(body.billing);
               setBillingProfile(body.billing);
+            } else {
+              setBillingProfile(DEFAULT_BILLING_PROFILE);
             }
             if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
           })
-          .catch(() => {});
+          .catch(() => {
+            setBillingProfile(DEFAULT_BILLING_PROFILE);
+          });
       } else {
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
@@ -324,7 +346,7 @@ export default function AssistantPage() {
       setAuthReady(true);
     });
 
-    const { data } = client.auth.onAuthStateChange((_event, session) => {
+    const { data } = client.auth.onAuthStateChange((event: AuthChangeEvent, session) => {
       const u = session?.user;
       setAuthUser(u ? { id: u.id } : null);
       if (u) {
@@ -334,11 +356,15 @@ export default function AssistantPage() {
             if (body?.ok && body.billing) {
               saveBillingProfile(body.billing);
               setBillingProfile(body.billing);
+            } else {
+              setBillingProfile(DEFAULT_BILLING_PROFILE);
             }
             if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
           })
-          .catch(() => {});
-      } else {
+          .catch(() => {
+            setBillingProfile(DEFAULT_BILLING_PROFILE);
+          });
+      } else if (event === "SIGNED_OUT") {
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
       }
@@ -482,9 +508,35 @@ export default function AssistantPage() {
     [persistenceCtx]
   );
 
-  const [session, rawDispatch] = useReducer(instrumentedReducer, INITIAL_SUPERVISION_SESSION);
+  const reducerWithSnapshot = useMemo(
+    () => withSnapshotRestore(instrumentedReducer),
+    [instrumentedReducer]
+  );
+
+  const [session, rawDispatch] = useReducer(reducerWithSnapshot, INITIAL_SUPERVISION_SESSION);
 
   sessionRef.current = session;
+
+  useLayoutEffect(() => {
+    const restored = readAssistantSessionSnapshotForInit(pendingAppendsRef);
+    if (!restored) return;
+    rawDispatch({ type: "__PSYASSIST_RESTORE__", payload: restored });
+  }, [rawDispatch]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      saveAssistantSessionSnapshot(session, pendingAppendsRef.current);
+    }, 400);
+    return () => window.clearTimeout(id);
+  }, [session]);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      saveAssistantSessionSnapshot(sessionRef.current, pendingAppendsRef.current);
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
 
   useEffect(() => {
     const step = session.step;
@@ -611,6 +663,7 @@ export default function AssistantPage() {
           });
           return;
         }
+        clearAssistantSessionSnapshot();
         lastSyncedNarrativeSigRef.current = "";
         narrativePersistInFlightRef.current = null;
         pendingAppendsRef.current = [];

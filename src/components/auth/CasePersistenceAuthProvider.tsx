@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -34,9 +35,11 @@ export function useCasePersistenceAuth(): CasePersistenceAuthContextValue {
 function CasePersistenceAuthModal({
   open,
   onClose,
+  loginHref,
 }: {
   open: boolean;
   onClose: () => void;
+  loginHref: string;
 }) {
   if (!open) return null;
 
@@ -65,7 +68,7 @@ function CasePersistenceAuthModal({
             Позже
           </Button>
           <Link
-            href="/login"
+            href={loginHref}
             className="inline-flex w-full items-center justify-center rounded-xl bg-[color:var(--accent-sand)] px-4 py-3 text-center text-sm font-medium tracking-[-0.01em] text-[color:var(--text)] transition hover:brightness-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in srgb,var(--accent-sand) 55%,transparent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--bg)] active:brightness-[0.96] sm:w-auto"
             onClick={onClose}
           >
@@ -78,6 +81,9 @@ function CasePersistenceAuthModal({
 }
 
 export function CasePersistenceAuthProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname() || "/assistant";
+  const loginHref = `/login?next=${encodeURIComponent(pathname)}`;
+
   const [authReady, setAuthReady] = useState(false);
   const [authUser, setAuthUser] = useState<{ id: string } | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -121,7 +127,7 @@ export function CasePersistenceAuthProvider({ children }: { children: ReactNode 
   return (
     <CasePersistenceAuthContext.Provider value={value}>
       {children}
-      <CasePersistenceAuthModal open={modalOpen} onClose={() => setModalOpen(false)} />
+      <CasePersistenceAuthModal open={modalOpen} onClose={() => setModalOpen(false)} loginHref={loginHref} />
     </CasePersistenceAuthContext.Provider>
   );
 }
