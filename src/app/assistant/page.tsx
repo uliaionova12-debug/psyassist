@@ -88,6 +88,10 @@ import {
   readAssistantSessionSnapshotForInit,
   saveAssistantSessionSnapshot,
 } from "@/lib/persistence/assistant-session-snapshot";
+import {
+  CASE_PERSISTENCE_AUTH_MODAL_TEXT,
+  CASE_PERSISTENCE_BANNER_FREE_ACCOUNT_TEXT,
+} from "@/lib/auth/case-persistence-modal-copy";
 import { useCasePersistenceAuth } from "@/components/auth/CasePersistenceAuthProvider";
 import { CasePurchasePaywall } from "@/components/billing/CasePurchasePaywall";
 import { FreeIntroPaywall } from "@/components/billing/FreeIntroPaywall";
@@ -310,6 +314,8 @@ export default function AssistantPage() {
 
   const loggedInPersistenceRef = useRef(false);
   loggedInPersistenceRef.current = Boolean(authUser);
+  const authReadyRef = useRef(false);
+  authReadyRef.current = authReady;
 
   useEffect(() => {
     const client = createSupabaseBrowserClientOptional();
@@ -483,15 +489,29 @@ export default function AssistantPage() {
     () => ({
       notePersistenceUnavailable: (code?: PersistenceFailureCode) => {
         const step = sessionRef.current.step;
-        if (code === "NO_SESSION" && !loggedInPersistenceRef.current) {
+        if (code === "NO_SESSION") {
+          // Before Supabase session hydrates, `authUser` is still null; do not treat as anonymous.
+          if (!authReadyRef.current) {
+            return;
+          }
+          if (loggedInPersistenceRef.current) {
+            if (billingProfileRef.current.planType !== "free") {
+              return;
+            }
+            if (clinicalSessionBlocksAuth(step)) {
+              return;
+            }
+            if (persistenceNotedRef.current) return;
+            persistenceNotedRef.current = true;
+            setBannerRef.current(CASE_PERSISTENCE_BANNER_FREE_ACCOUNT_TEXT);
+            return;
+          }
           if (clinicalSessionBlocksAuth(step)) {
             return;
           }
           if (persistenceNotedRef.current) return;
           persistenceNotedRef.current = true;
-          setBannerRef.current(
-            "Чтобы продолжить и сохранить работу, войдите в PsyAssist."
-          );
+          setBannerRef.current(CASE_PERSISTENCE_AUTH_MODAL_TEXT);
           return;
         }
         if (persistenceNotedRef.current) return;
@@ -972,6 +992,7 @@ export default function AssistantPage() {
   }, [session.step, session.chatAnalysisResult, session.chatAnalysisFocusKey, session.remoteCaseId]);
 
   useEffect(() => {
+    if (!authReady) return;
     void syncAssistantCaseInitialState({
       session,
       lastSyncedSigRef: lastSyncedNarrativeSigRef,
@@ -980,10 +1001,17 @@ export default function AssistantPage() {
       dispatch: rawDispatch,
     });
   }, [
+    authReady,
+    authUser?.id,
     session,
     persistenceCtx.notePersistenceUnavailable,
     rawDispatch,
   ]);
+
+  useEffect(() => {
+    if (session.remoteCaseId == null) return;
+    setPersistenceBanner(null);
+  }, [session.remoteCaseId]);
 
   useEffect(() => {
     if (!session.remoteCaseId) return;
@@ -1841,7 +1869,9 @@ export default function AssistantPage() {
   const caseStartBlocked = !canStartCase(billingProfile);
 
   const showPersistenceAuthBanner =
-    Boolean(persistenceBanner) && !clinicalSessionBlocksAuth(session.step);
+    billingProfile.planType === "free" &&
+    Boolean(persistenceBanner) &&
+    !clinicalSessionBlocksAuth(session.step);
 
   const lowDataBanner =
     session.narrativeSufficient === false &&
