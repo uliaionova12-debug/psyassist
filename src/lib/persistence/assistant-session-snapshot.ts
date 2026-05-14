@@ -21,6 +21,23 @@ function mergeRestoredSession(raw: unknown): SupervisionSession | null {
   return { ...INITIAL_SUPERVISION_SESSION, ...raw } as SupervisionSession;
 }
 
+/** Validate JSON stored in `cases.session_snapshot` (no TTL; used for «Продолжить»). */
+export function parseAssistantSnapshotJsonFromServer(raw: unknown): AssistantSessionSnapshotV1 | null {
+  if (!isRecord(raw)) return null;
+  if (raw.v !== 1) return null;
+  const session = mergeRestoredSession(raw.session);
+  if (!session) return null;
+  const pending = raw.pendingAppends;
+  const pendingAppends =
+    Array.isArray(pending) && pending.every((x) => typeof x === "string") ? pending.slice() : [];
+  return {
+    v: 1,
+    savedAt: typeof raw.savedAt === "number" ? raw.savedAt : Date.now(),
+    session,
+    pendingAppends,
+  };
+}
+
 export function readAssistantSessionSnapshotForInit(targetRef: { current: string[] }): SupervisionSession | null {
   if (typeof sessionStorage === "undefined") return null;
   try {

@@ -2,6 +2,7 @@
  * Browser helpers for PsyAssist persistence API routes (cookie session → Supabase).
  */
 
+import type { AssistantSessionSnapshotV1 } from "@/lib/persistence/assistant-session-snapshot";
 import type { SupervisionCase, SupervisionCaseSummary } from "@/lib/persistence/types";
 
 export type PersistenceFailureCode =
@@ -162,6 +163,69 @@ export async function persistence_update_case_initial(
   return {
     ok: false,
     code: data.code ?? "UPDATE_FAILED",
+    message: data.message,
+  };
+}
+
+export type CompleteCaseSessionBody = {
+  snapshot: { v: 1; savedAt?: number; session: unknown; pendingAppends?: string[] };
+  focus: string | null;
+  current_step: string | null;
+  current_layer: string | null;
+  current_question: string | null;
+  duration_minutes: number | null;
+  last_insight: string | null;
+  case_title?: string | null;
+};
+
+export async function persistence_complete_case_session(
+  caseId: number,
+  body: CompleteCaseSessionBody
+): Promise<{ ok: true } | { ok: false; code: PersistenceFailureCode; message?: string }> {
+  const data = await postJson<{
+    ok?: boolean;
+    code?: PersistenceFailureCode;
+    message?: string;
+  }>(`/api/persistence/cases/${caseId}/complete`, body);
+  if (data.ok) return { ok: true };
+  return {
+    ok: false,
+    code: data.code ?? "COMPLETE_FAILED",
+    message: data.message,
+  };
+}
+
+export async function persistence_patch_case_status(
+  caseId: number,
+  status: "active" | "completed" | "archived"
+): Promise<{ ok: true } | { ok: false; code: PersistenceFailureCode; message?: string }> {
+  const data = await patchJson<{
+    ok?: boolean;
+    code?: PersistenceFailureCode;
+    message?: string;
+  }>(`/api/persistence/cases/${caseId}`, { status });
+  if (data.ok) return { ok: true };
+  return {
+    ok: false,
+    code: data.code ?? "PATCH_FAILED",
+    message: data.message,
+  };
+}
+
+export async function persistence_get_case_resume(caseId: number): Promise<
+  | { ok: true; snapshot: AssistantSessionSnapshotV1 }
+  | { ok: false; code: PersistenceFailureCode; message?: string }
+> {
+  const data = await getJson<{
+    ok?: boolean;
+    snapshot?: AssistantSessionSnapshotV1;
+    code?: PersistenceFailureCode;
+    message?: string;
+  }>(`/api/persistence/cases/${caseId}/resume`);
+  if (data.ok && data.snapshot?.v === 1) return { ok: true, snapshot: data.snapshot };
+  return {
+    ok: false,
+    code: data.code ?? "RESUME_FAILED",
     message: data.message,
   };
 }

@@ -14,6 +14,13 @@ export function caseSummaryRowToSupervisionSummary(row: CaseSummaryRow): Supervi
     first_session_date: row.first_session_date,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    status: row.status,
+    focus: row.focus,
+    current_step: row.current_step,
+    current_layer: row.current_layer,
+    duration_minutes: row.duration_minutes,
+    last_insight: row.last_insight,
+    resume_available: Boolean(row.resume_available),
   };
 }
 
@@ -115,6 +122,7 @@ export function parseCaseContextBlob(caseContext: string | null): SupervisionCas
 }
 
 export function caseRowToSupervisionCase(row: CaseRow): SupervisionCase {
+  const parsed = parseCaseContextBlob(row.case_context);
   const summary: SupervisionCaseSummary = {
     id: String(row.id),
     case_title: row.case_title,
@@ -122,11 +130,18 @@ export function caseRowToSupervisionCase(row: CaseRow): SupervisionCase {
     first_session_date: row.first_session_date,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    status: row.status,
+    focus: row.focus,
+    current_step: row.current_step,
+    current_layer: row.current_layer,
+    duration_minutes: row.duration_minutes,
+    last_insight: row.last_insight,
+    resume_available: Boolean(row.session_snapshot),
   };
-  const parsed = parseCaseContextBlob(row.case_context);
   return {
     ...summary,
     ...parsed,
+    focus: row.focus ?? parsed.focus,
     user_name: row.user_name,
     initial_case: row.initial_case,
     case_context: row.case_context,

@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { _CHAT_FOCUS_PROMPTS, type ChatFocusPromptKey } from "@/lib/clinical/chat-analysis";
 
-import { Button } from "@/components/ui/Button";
+import { Button, ButtonLink } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/ui/Container";
 import {
@@ -76,6 +77,8 @@ import {
   type PersistenceFailureCode,
   isPersistenceUnavailableCode,
   persistence_append_case_context,
+  persistence_complete_case_session,
+  persistence_get_case_resume,
   persistence_supervision_finish,
 } from "@/lib/persistence/assistant-client";
 import {
@@ -83,6 +86,7 @@ import {
   flushPendingCaseAppends,
   syncAssistantCaseInitialState,
 } from "@/lib/persistence/assistant-reducer";
+import { deriveCaseCardMeta } from "@/lib/persistence/case-card-meta";
 import {
   clearAssistantSessionSnapshot,
   readAssistantSessionSnapshotForInit,
@@ -287,6 +291,13 @@ export default function AssistantPage() {
 
   const [persistenceBanner, setPersistenceBanner] = useState<string | null>(null);
   const [billingSoftNotice, setBillingSoftNotice] = useState<string | null>(null);
+  const [finishSaveStatus, setFinishSaveStatus] = useState<
+    "idle" | "saving" | "success" | "error" | "skipped"
+  >("idle");
+  const preFinishSessionRef = useRef<SupervisionSession | null>(null);
+  const persistFinishOnceRef = useRef<string | null>(null);
+  const resumeProcessedKeyRef = useRef<string | null>(null);
+  const router = useRouter();
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [navFlowError, setNavFlowError] = useState<string | null>(null);
   const [reflectionOverloadRetry, setReflectionOverloadRetry] = useState(false);
@@ -538,10 +549,81 @@ export default function AssistantPage() {
   sessionRef.current = session;
 
   useLayoutEffect(() => {
+    if (typeof window !== "undefined") {
+      const resume = new URLSearchParams(window.location.search).get("resume");
+      if (resume) return;
+    }
     const restored = readAssistantSessionSnapshotForInit(pendingAppendsRef);
     if (!restored) return;
     rawDispatch({ type: "__PSYASSIST_RESTORE__", payload: restored });
   }, [rawDispatch]);
+
+  useEffect(() => {
+    if (!authReady || !authUser?.id) return;
+    const ridRaw =
+      typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("resume") : null;
+    if (!ridRaw || !/^\d+$/.test(ridRaw)) return;
+    const caseId = Number(ridRaw);
+    const key = `${authUser.id}:${ridRaw}`;
+    if (resumeProcessedKeyRef.current === key) return;
+    resumeProcessedKeyRef.current = key;
+
+    void persistence_get_case_resume(caseId).then((r) => {
+      if (!r.ok) {
+        setBillingSoftNotice(
+          r.code === "NO_SNAPSHOT"
+            ? "Для этого кейса нет сохранённой сессии на сервере."
+            : "Не удалось восстановить кейс с сервера."
+        );
+        router.replace("/assistant", { scroll: false });
+        resumeProcessedKeyRef.current = null;
+        return;
+      }
+      rawDispatch({ type: "__PSYASSIST_RESTORE__", payload: r.snapshot.session });
+      pendingAppendsRef.current = r.snapshot.pendingAppends.slice();
+      void flushPendingCaseAppends(caseId, pendingAppendsRef, persistenceCtx.notePersistenceUnavailable);
+      saveAssistantSessionSnapshot(r.snapshot.session, pendingAppendsRef.current);
+      router.replace("/assistant", { scroll: false });
+    });
+  }, [authReady, authUser?.id, rawDispatch, router, persistenceCtx.notePersistenceUnavailable]);
+
+  useEffect(() => {
+    if (session.step !== "finished" || !authUser?.id) return;
+    const rid = session.remoteCaseId;
+    const onceKey = `finished-auth:${authUser.id}:${rid ?? "norid"}`;
+    if (persistFinishOnceRef.current === onceKey) return;
+    persistFinishOnceRef.current = onceKey;
+
+    const pre = preFinishSessionRef.current;
+    if (rid != null && pre != null) {
+      setFinishSaveStatus("saving");
+      const meta = deriveCaseCardMeta(pre);
+      void persistence_complete_case_session(rid, {
+        snapshot: {
+          v: 1,
+          savedAt: Date.now(),
+          session: pre,
+          pendingAppends: pendingAppendsRef.current.slice(),
+        },
+        focus: meta.focus,
+        current_step: meta.current_step,
+        current_layer: meta.current_layer,
+        current_question: meta.current_question,
+        duration_minutes: meta.duration_minutes,
+        last_insight: meta.last_insight,
+        case_title: pre.intake.client_alias?.trim() ?? null,
+      }).then((r) => {
+        if (r.ok) {
+          setFinishSaveStatus("success");
+          preFinishSessionRef.current = null;
+        } else {
+          setFinishSaveStatus("error");
+        }
+      });
+    } else {
+      setFinishSaveStatus("skipped");
+    }
+  }, [session.step, authUser?.id, session.remoteCaseId]);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -675,6 +757,21 @@ export default function AssistantPage() {
         });
       }
 
+      if (
+        (action.type === "POST_REFLECTION_ACTION" && action.id === "finish_after_reflection") ||
+        action.type === "NAV_SUPERVISION_TAIL_FINISH"
+      ) {
+        if (loggedInPersistenceRef.current && s.remoteCaseId != null) {
+          try {
+            preFinishSessionRef.current = JSON.parse(JSON.stringify(s)) as SupervisionSession;
+          } catch {
+            preFinishSessionRef.current = null;
+          }
+        } else {
+          preFinishSessionRef.current = null;
+        }
+      }
+
       if (action.type === "RESET") {
         if (!canStartCase(billingProfileRef.current) && !isQaMode()) {
           void trackEvent({
@@ -689,6 +786,10 @@ export default function AssistantPage() {
         pendingAppendsRef.current = [];
         persistenceNotedRef.current = false;
         setPersistenceBanner(null);
+        preFinishSessionRef.current = null;
+        persistFinishOnceRef.current = null;
+        setFinishSaveStatus("idle");
+        resumeProcessedKeyRef.current = null;
         navClarifyingLoadSigRef.current = null;
         navFinalLoadSigRef.current = null;
         navPersistedSigRef.current = null;
@@ -1868,6 +1969,13 @@ export default function AssistantPage() {
 
   const caseStartBlocked = !canStartCase(billingProfile);
 
+  const showFinishedPaywall =
+    caseStartBlocked &&
+    (!authUser ||
+      finishSaveStatus === "success" ||
+      finishSaveStatus === "error" ||
+      finishSaveStatus === "skipped");
+
   const showPersistenceAuthBanner =
     billingProfile.planType === "free" &&
     Boolean(persistenceBanner) &&
@@ -2842,7 +2950,7 @@ export default function AssistantPage() {
                   {navFlowError}
                 </div>
               )}
-              {showPremiumPostIntroPaywall && (
+              {showPremiumPostIntroPaywall && !authUser && (
                 <div className="space-y-3">
                   <p className="text-sm leading-relaxed text-[color:var(--muted)]">
                     Вы завершили этот цикл разбора. Чуть ниже — как сохранить доступ к следующим кейсам в том же формате.
@@ -3334,7 +3442,36 @@ export default function AssistantPage() {
               <p className="text-sm leading-relaxed text-[color:var(--muted)]">
                 Когда будете готовы продолжить — я рядом.
               </p>
-              {caseStartBlocked && (
+              {authUser && finishSaveStatus === "saving" && (
+                <p className="text-sm leading-relaxed text-[color:var(--muted)]" aria-live="polite">
+                  Сохраняем кейс в «Мои случаи»…
+                </p>
+              )}
+              {authUser && finishSaveStatus === "success" && (
+                <div className="rounded-xl border border-[color:color-mix(in srgb,var(--accent-green)40%,var(--border))] bg-[color:color-mix(in srgb,var(--accent-green)10%,white)] px-4 py-4">
+                  <p className="text-sm font-medium text-[color:var(--text)]">
+                    Кейс сохранён в «Мои случаи».
+                  </p>
+                  <div className="mt-3">
+                    <ButtonLink href="/cases" tone="primary" className="w-full sm:w-auto">
+                      Перейти в мои случаи
+                    </ButtonLink>
+                  </div>
+                </div>
+              )}
+              {authUser && finishSaveStatus === "error" && (
+                <p className="rounded-xl border border-[color:color-mix(in srgb,var(--accent-sand)40%,var(--border))] bg-[color:color-mix(in srgb,var(--accent-sand)10%,white)] px-4 py-3 text-sm text-[color:var(--muted)]">
+                  Не удалось сохранить кейс на сервере. Попробуйте позже — разбор уже в истории сессии в
+                  браузере.
+                </p>
+              )}
+              {authUser && finishSaveStatus === "skipped" && session.remoteCaseId == null && (
+                <p className="text-sm leading-relaxed text-[color:var(--muted)]">
+                  Кейс ещё не был привязан к аккаунту на сервере — сохранение в «Мои случаи» недоступно для
+                  этой сессии.
+                </p>
+              )}
+              {showFinishedPaywall && (
                 <div className="space-y-5">
                   <p className="text-sm leading-relaxed text-[color:var(--muted)] whitespace-pre-line">
                     {PREMIUM_PAYWALL_LEAD}
