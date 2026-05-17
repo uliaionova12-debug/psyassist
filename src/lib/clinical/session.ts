@@ -725,12 +725,12 @@ export function supervisionReducer(
 
     case "TENSION_INTERRUPT_START": {
       if (state.tensionCompleted) return state;
-      if (state.supervisionAnswers.length === 0) return state;
       if (!state.focusKey || !state.sessionDepth) return state;
       const bank = getQuestionsForFocus(state.focusKey);
       const total = getTotalQuestionCount(state.focusKey, state.sessionDepth);
       const idx = state.questionModuleIdx;
       if (idx >= total || idx >= bank.length) return state;
+      if (state.supervisionAnswers.length !== idx) return state;
       const questionText = bank[idx];
       if (!questionText) return state;
       const answerText = state.draftInput.trim();
@@ -743,11 +743,10 @@ export function supervisionReducer(
           answer: answerText,
         },
       ];
-      const nextIdx = idx + 1;
       return {
         ...state,
         supervisionAnswers: bankedAnswers,
-        questionModuleIdx: nextIdx,
+        questionModuleIdx: idx,
         tensionPending: {
           moduleIdx: idx,
           moduleNum: idx + 1,
@@ -774,8 +773,14 @@ export function supervisionReducer(
       const pending = state.tensionPending;
       const restoreDraft = pending?.originalAnswer ?? "";
       if (!pending) {
+        const idx = state.questionModuleIdx;
+        const rolledBackAnswers =
+          state.supervisionAnswers.length > idx
+            ? state.supervisionAnswers.filter((_, i) => i !== idx)
+            : state.supervisionAnswers;
         return {
           ...state,
+          supervisionAnswers: rolledBackAnswers,
           tensionPending: null,
           tensionStopText: "",
           draftInput: restoreDraft,
@@ -830,7 +835,7 @@ export function supervisionReducer(
         analysis: action.analysis.trim(),
       };
 
-      const nextIdx = state.questionModuleIdx;
+      const nextIdx = pending.moduleIdx + 1;
       const total = getTotalQuestionCount(state.focusKey, state.sessionDepth);
 
       const clearedTension = {
@@ -839,7 +844,7 @@ export function supervisionReducer(
         tensionFlowError: "",
       };
 
-      if (nextIdx >= total) {
+      if (nextIdx >= total && nextAnswers.length >= total) {
         return {
           ...state,
           ...clearedTension,
@@ -879,8 +884,14 @@ export function supervisionReducer(
       const pending = state.tensionPending;
       const restore = pending?.originalAnswer ?? "";
       if (!pending) {
+        const idx = state.questionModuleIdx;
+        const rolledBackAnswers =
+          state.supervisionAnswers.length > idx
+            ? state.supervisionAnswers.filter((_, i) => i !== idx)
+            : state.supervisionAnswers;
         return {
           ...state,
+          supervisionAnswers: rolledBackAnswers,
           tensionPending: null,
           tensionStopText: "",
           tensionFlowError: "",
