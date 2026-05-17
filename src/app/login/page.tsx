@@ -1,8 +1,31 @@
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { LoginClient } from "@/app/login/LoginClient";
+import { sanitizeInternalNextPath } from "@/lib/auth/redirect-urls";
+import { createSupabaseServerClientOptional } from "@/lib/supabase/server-optional";
 
-export default function LoginPage() {
+type Props = {
+  searchParams: Promise<{ next?: string }>;
+};
+
+export default async function LoginPage({ searchParams }: Props) {
+  const params = await searchParams;
+  const nextPath = sanitizeInternalNextPath(params.next);
+
+  const supabase = await createSupabaseServerClientOptional();
+  if (supabase) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    console.info("[login/page] user id or NO_SESSION", user?.id ?? "NO_SESSION");
+    if (user) {
+      redirect(nextPath);
+    }
+  } else {
+    console.info("[login/page] user id or NO_SESSION", "NO_SESSION");
+  }
+
   return (
     <Suspense
       fallback={
