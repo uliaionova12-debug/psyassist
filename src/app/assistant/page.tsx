@@ -116,8 +116,6 @@ import { SubscriptionPaywall } from "@/components/billing/SubscriptionPaywall";
 import { SupervisionTrustBlock } from "@/components/billing/SupervisionTrustBlock";
 import { PRODUCT_EVENTS } from "@/lib/analytics/constants";
 import { trackEvent } from "@/lib/analytics/events";
-import type { AuthChangeEvent } from "@supabase/supabase-js";
-
 import type { PlanType, UserBillingProfile } from "@/lib/billing/billing-types";
 import { tryConsumeCaseStart } from "@/lib/billing/credits";
 import {
@@ -330,7 +328,7 @@ function buildCaseTextForNav(session: SupervisionSession): string {
 }
 
 export default function AssistantPage() {
-  const { openCasePersistenceAuthModal } = useCasePersistenceAuth();
+  const { authReady, authUser, openCasePersistenceAuthModal } = useCasePersistenceAuth();
   const persistenceNotedRef = useRef(false);
   const pendingAppendsRef = useRef<string[]>([]);
   const lastSyncedNarrativeSigRef = useRef("");
@@ -379,8 +377,12 @@ export default function AssistantPage() {
   /** Authed users: false until GET /api/user/profile completes (avoids paywall from stale cache before server truth). */
   const [billingHydrated, setBillingHydrated] = useState(false);
   const lastHandledAuthUserIdRef = useRef<string | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [authUser, setAuthUser] = useState<{ id: string } | null>(null);
+  /** Server cookie session (GET /api/user/profile), aligned with AppHeader server auth. */
+  const [serverAuthedKnown, setServerAuthedKnown] = useState(false);
+  const [serverAuthed, setServerAuthed] = useState(false);
+
+  const introAuthResolved = authReady && serverAuthedKnown;
+  const introIsAuthenticated = Boolean(authUser) || serverAuthed;
 
   const billingForProductGates = useMemo(() => {
     if (!authUser || billingHydrated) return billingProfile;
@@ -396,13 +398,34 @@ export default function AssistantPage() {
   authReadyRef.current = authReady;
 
   useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/user/profile", { credentials: "include", cache: "no-store" })
+      .then((res) => {
+        if (cancelled) return;
+        setServerAuthed(res.ok);
+        setServerAuthedKnown(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setServerAuthed(false);
+          setServerAuthedKnown(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const client = createSupabaseBrowserClientOptional();
     if (!client) {
       setBillingHydrated(true);
       setBillingProfile(loadBillingProfile());
-      setAuthReady(true);
-      return;
     }
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
 
     const applyProfileBody = (body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
       if (body?.ok && body.billing) {
@@ -417,7 +440,7 @@ export default function AssistantPage() {
 
     const fetchProfileAndHydrate = () => {
       setBillingHydrated(false);
-      void fetch("/api/user/profile", { credentials: "include" })
+      void fetch("/api/user/profile", { credentials: "include", cache: "no-store" })
         .then((r) => r.json())
         .then((body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
           applyProfileBody(body);
@@ -428,57 +451,23 @@ export default function AssistantPage() {
         });
     };
 
-    let subscription: { unsubscribe: () => void } | undefined;
-
-    void client.auth.getSession().then(({ data: { session } }) => {
-      const u = session?.user;
-      setAuthUser(u ? { id: u.id } : null);
-      if (u) {
-        invalidateLocalBillingStorageBeforeSignedInHydrate();
-        const prev = lastHandledAuthUserIdRef.current;
-        const isNewIdentity = prev !== u.id;
-        lastHandledAuthUserIdRef.current = u.id;
-        if (isNewIdentity) {
-          setBillingHydrated(false);
-          setBillingProfile(DEFAULT_BILLING_PROFILE);
-        }
+    if (authUser?.id) {
+      invalidateLocalBillingStorageBeforeSignedInHydrate();
+      const prev = lastHandledAuthUserIdRef.current;
+      const isNewIdentity = prev !== authUser.id;
+      lastHandledAuthUserIdRef.current = authUser.id;
+      if (isNewIdentity) {
+        setBillingHydrated(false);
+        setBillingProfile(DEFAULT_BILLING_PROFILE);
         fetchProfileAndHydrate();
-      } else {
-        lastHandledAuthUserIdRef.current = null;
-        setBillingHydrated(true);
-        setBillingProfile(loadBillingProfile());
-        setQaModeServerFlag(false);
       }
-      setAuthReady(true);
-    });
-
-    const { data } = client.auth.onAuthStateChange((event: AuthChangeEvent, session) => {
-      const u = session?.user;
-      setAuthUser(u ? { id: u.id } : null);
-      if (u) {
-        invalidateLocalBillingStorageBeforeSignedInHydrate();
-        const prev = lastHandledAuthUserIdRef.current;
-        const isNewIdentity = prev !== u.id;
-        lastHandledAuthUserIdRef.current = u.id;
-        if (isNewIdentity) {
-          setBillingHydrated(false);
-          setBillingProfile(DEFAULT_BILLING_PROFILE);
-        }
-        // TOKEN_REFRESHED must not reset billingHydrated or refetch profile mid-clinical flow.
-        if (isNewIdentity || event === "INITIAL_SESSION" || event === "SIGNED_IN") {
-          fetchProfileAndHydrate();
-        }
-      } else if (event === "SIGNED_OUT") {
-        lastHandledAuthUserIdRef.current = null;
-        setBillingHydrated(true);
-        setBillingProfile(loadBillingProfile());
-        setQaModeServerFlag(false);
-      }
-    });
-    subscription = data.subscription;
-
-    return () => subscription?.unsubscribe();
-  }, []);
+    } else {
+      lastHandledAuthUserIdRef.current = null;
+      setBillingHydrated(true);
+      setBillingProfile(loadBillingProfile());
+      setQaModeServerFlag(false);
+    }
+  }, [authReady, authUser?.id]);
 
   const billingProfileRef = useRef(billingProfile);
   billingProfileRef.current = billingProfile;
@@ -2358,8 +2347,17 @@ export default function AssistantPage() {
               <p className="whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
                 {CASE_CONFIDENTIALITY_REMINDER}
               </p>
-              {authReady && (
-                <CaseMemoryPremiumCard isAuthenticated={Boolean(authUser)} />
+              {!introAuthResolved ? (
+                <div
+                  className="space-y-3 rounded-2xl border border-[color:color-mix(in srgb,var(--accent-sand) 32%,var(--border))] bg-[color:color-mix(in srgb,var(--accent-sand) 5%,var(--card))] p-4 sm:p-5"
+                  aria-busy="true"
+                  aria-label="Проверка входа в аккаунт"
+                >
+                  <div className="h-16 animate-pulse rounded-lg bg-[color:color-mix(in srgb,var(--muted) 18%,transparent)]" />
+                  <div className="h-4 w-4/5 max-w-md animate-pulse rounded-md bg-[color:color-mix(in srgb,var(--muted) 22%,transparent)]" />
+                </div>
+              ) : (
+                <CaseMemoryPremiumCard isAuthenticated={introIsAuthenticated} />
               )}
               {caseStartBlocked ? (
                 <div className="space-y-5">
