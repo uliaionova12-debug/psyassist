@@ -74,6 +74,10 @@ import {
 import { buildPremiumSessionPlainExport } from "@/lib/clinical/session-plain-export";
 import { detect_tension_signals, TENSION_STOP_STEP_ONE_OPTIONS } from "@/lib/clinical/tension";
 import {
+  classifyAssistantPromptResponse,
+  type AssistantApiPayload,
+} from "@/lib/ai/assistant-response";
+import {
   type PersistenceFailureCode,
   isPersistenceUnavailableCode,
   persistence_append_case_context,
@@ -200,6 +204,9 @@ function therapistApiFields(s: SupervisionSession) {
 
 const TENSION_CLIENT_TIMEOUT_MS = 12_000;
 
+const ASSISTANT_AUTO_OVERLOAD_ATTEMPTS = 3;
+const ASSISTANT_AUTO_OVERLOAD_BASE_MS = 2_000;
+
 function isTensionRetriableFetchFailure(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const name = (err as { name?: string }).name;
@@ -297,14 +304,22 @@ export default function AssistantPage() {
   const [finishSaveStatus, setFinishSaveStatus] = useState<
     "idle" | "saving" | "success" | "error" | "skipped"
   >("idle");
+  const [finishSaveRetryTick, setFinishSaveRetryTick] = useState(0);
   const preFinishSessionRef = useRef<SupervisionSession | null>(null);
   const persistFinishOnceRef = useRef<string | null>(null);
+  const finishSaveInFlightRef = useRef(false);
   const resumeProcessedKeyRef = useRef<string | null>(null);
   const router = useRouter();
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [navFlowError, setNavFlowError] = useState<string | null>(null);
   const [reflectionOverloadRetry, setReflectionOverloadRetry] = useState(false);
   const [closingIntegrationOverloadRetry, setClosingIntegrationOverloadRetry] = useState(false);
+  const [integrationAiRetryTick, setIntegrationAiRetryTick] = useState(0);
+  const [closingAiRetryTick, setClosingAiRetryTick] = useState(0);
+  const integrationOverloadAttemptsRef = useRef(0);
+  const closingOverloadAttemptsRef = useRef(0);
+  const integrationOverloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closingOverloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sessionCopiedNotice, setSessionCopiedNotice] = useState(false);
   const sessionCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   setBannerRef.current = (msg: string) => setPersistenceBanner(msg);
@@ -626,8 +641,7 @@ export default function AssistantPage() {
   useEffect(() => {
     if (session.step !== "finished" || !authUser?.id) return;
     const onceKey = `finished-auth:${authUser.id}`;
-    if (persistFinishOnceRef.current === onceKey) return;
-    persistFinishOnceRef.current = onceKey;
+    if (persistFinishOnceRef.current === onceKey || finishSaveInFlightRef.current) return;
 
     let snapshotSession: SupervisionSession | null = preFinishSessionRef.current;
     if (snapshotSession == null) {
@@ -642,70 +656,77 @@ export default function AssistantPage() {
       return;
     }
 
+    finishSaveInFlightRef.current = true;
     setFinishSaveStatus("saving");
     const meta = deriveCaseCardMeta(snapshotSession);
 
     void (async () => {
-      let caseId = sessionRef.current.remoteCaseId;
-      if (caseId == null) {
-        const alias = snapshotSession!.intake.client_alias?.trim();
-        const dur = snapshotSession!.intake.therapy_duration?.trim();
-        const narrative = snapshotSession!.fullNarrative.trim();
-        if (!narrative || !alias || !dur) {
-          setFinishSaveStatus("skipped");
-          return;
+      try {
+        let caseId = sessionRef.current.remoteCaseId;
+        if (caseId == null) {
+          const alias = snapshotSession!.intake.client_alias?.trim();
+          const dur = snapshotSession!.intake.therapy_duration?.trim();
+          const narrative = snapshotSession!.fullNarrative.trim();
+          if (!narrative || !alias || !dur) {
+            setFinishSaveStatus("skipped");
+            return;
+          }
+          const saved = await persistence_save_case({
+            userName: null,
+            caseTitle: alias,
+            clientName: alias,
+            firstSessionDate: dur,
+            initialCase: narrative,
+          });
+          if (!saved.ok) {
+            setFinishSaveStatus("error");
+            return;
+          }
+          caseId = saved.caseId;
+          rawDispatch({ type: "SET_REMOTE_CASE_ID", caseId });
+          await flushPendingCaseAppends(
+            caseId,
+            pendingAppendsRef,
+            persistenceCtx.notePersistenceUnavailable
+          );
         }
-        const saved = await persistence_save_case({
-          userName: null,
-          caseTitle: alias,
-          clientName: alias,
-          firstSessionDate: dur,
-          initialCase: narrative,
-        });
-        if (!saved.ok) {
-          setFinishSaveStatus("error");
-          return;
-        }
-        caseId = saved.caseId;
-        rawDispatch({ type: "SET_REMOTE_CASE_ID", caseId });
-        await flushPendingCaseAppends(
-          caseId,
-          pendingAppendsRef,
-          persistenceCtx.notePersistenceUnavailable
-        );
-      }
 
-      const r = await persistence_complete_case_session(caseId, {
-        snapshot: {
-          v: 1,
-          savedAt: Date.now(),
-          session: snapshotSession!,
-          pendingAppends: pendingAppendsRef.current.slice(),
-        },
-        focus: meta.focus,
-        current_step: meta.current_step,
-        current_layer: meta.current_layer,
-        current_question: meta.current_question,
-        duration_minutes: meta.duration_minutes,
-        last_insight: meta.last_insight,
-        case_title: snapshotSession!.intake.client_alias?.trim() ?? null,
-      });
-      if (r.ok) {
-        setFinishSaveStatus("success");
-        preFinishSessionRef.current = null;
-        const bp = billingProfileRef.current;
-        if (bp.planType === "free" && !bp.freeIntroUsed) {
-          freeIntroCompleteTrackedRef.current = true;
-          persistBilling({ ...bp, freeIntroUsed: true });
-          void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
+        const r = await persistence_complete_case_session(caseId, {
+          snapshot: {
+            v: 1,
+            savedAt: Date.now(),
+            session: snapshotSession!,
+            pendingAppends: pendingAppendsRef.current.slice(),
+          },
+          focus: meta.focus,
+          current_step: meta.current_step,
+          current_layer: meta.current_layer,
+          current_question: meta.current_question,
+          duration_minutes: meta.duration_minutes,
+          last_insight: meta.last_insight,
+          case_title: snapshotSession!.intake.client_alias?.trim() ?? null,
+        });
+        if (r.ok) {
+          persistFinishOnceRef.current = onceKey;
+          setFinishSaveStatus("success");
+          preFinishSessionRef.current = null;
+          const bp = billingProfileRef.current;
+          if (bp.planType === "free" && !bp.freeIntroUsed) {
+            freeIntroCompleteTrackedRef.current = true;
+            persistBilling({ ...bp, freeIntroUsed: true });
+            void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
+          }
+        } else {
+          setFinishSaveStatus("error");
         }
-      } else {
-        setFinishSaveStatus("error");
+      } finally {
+        finishSaveInFlightRef.current = false;
       }
     })();
   }, [
     session.step,
     authUser?.id,
+    finishSaveRetryTick,
     persistBilling,
     rawDispatch,
     persistenceCtx.notePersistenceUnavailable,
@@ -874,7 +895,9 @@ export default function AssistantPage() {
         setPersistenceBanner(null);
         preFinishSessionRef.current = null;
         persistFinishOnceRef.current = null;
+        finishSaveInFlightRef.current = false;
         setFinishSaveStatus("idle");
+        setFinishSaveRetryTick(0);
         resumeProcessedKeyRef.current = null;
         navClarifyingLoadSigRef.current = null;
         navFinalLoadSigRef.current = null;
@@ -1404,6 +1427,36 @@ export default function AssistantPage() {
   const closingIntegrationKeyRef = useRef<string | null>(null);
   const closingIntegrationFetchGenRef = useRef(0);
 
+  const clearIntegrationOverloadTimer = useCallback(() => {
+    if (integrationOverloadTimerRef.current) {
+      clearTimeout(integrationOverloadTimerRef.current);
+      integrationOverloadTimerRef.current = null;
+    }
+  }, []);
+
+  const clearClosingOverloadTimer = useCallback(() => {
+    if (closingOverloadTimerRef.current) {
+      clearTimeout(closingOverloadTimerRef.current);
+      closingOverloadTimerRef.current = null;
+    }
+  }, []);
+
+  const retryIntegrationReflectionFetch = useCallback(() => {
+    setReflectionOverloadRetry(false);
+    integrationOverloadAttemptsRef.current = 0;
+    reflectionKeyRef.current = null;
+    clearIntegrationOverloadTimer();
+    setIntegrationAiRetryTick((t) => t + 1);
+  }, [clearIntegrationOverloadTimer]);
+
+  const retryClosingIntegrationFetch = useCallback(() => {
+    setClosingIntegrationOverloadRetry(false);
+    closingOverloadAttemptsRef.current = 0;
+    closingIntegrationKeyRef.current = null;
+    clearClosingOverloadTimer();
+    setClosingAiRetryTick((t) => t + 1);
+  }, [clearClosingOverloadTimer]);
+
   const runDetection = useCallback(async () => {
     const narrative = session.fullNarrative.trim();
     if (!narrative) {
@@ -1439,6 +1492,8 @@ export default function AssistantPage() {
   useEffect(() => {
     if (session.step !== "integration_reflection" || session.reflectionStatus !== "loading") {
       reflectionKeyRef.current = null;
+      integrationOverloadAttemptsRef.current = 0;
+      clearIntegrationOverloadTimer();
       return;
     }
     if (!session.focusKey || !session.sessionDepth) {
@@ -1477,6 +1532,7 @@ export default function AssistantPage() {
     reflectionKeyRef.current = sig;
 
     const fetchGen = ++integrationReflectionFetchGenRef.current;
+    const ac = new AbortController();
 
     void (async () => {
       try {
@@ -1484,21 +1540,11 @@ export default function AssistantPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt }),
+          signal: ac.signal,
         });
-        if (fetchGen !== integrationReflectionFetchGenRef.current) return;
+        if (ac.signal.aborted || fetchGen !== integrationReflectionFetchGenRef.current) return;
 
-        const data = (await res.json()) as {
-          ok?: boolean;
-          text?: string;
-          message?: string;
-          code?: string;
-          status?: string;
-          retryable?: boolean;
-        };
-
-        const rawText = data.text;
-        const responseKeys =
-          data && typeof data === "object" ? Object.keys(data as Record<string, unknown>) : [];
+        const data = (await res.json()) as AssistantApiPayload;
 
         if (process.env.NODE_ENV === "development") {
           console.info("[INTEGRATION_REFLECTION_DEV] response parsed (browser console)", {
@@ -1509,57 +1555,54 @@ export default function AssistantPage() {
             message: data.message,
             dataStatus: data.status,
             retryable: data.retryable,
-            responseKeys,
-            textTruthy: Boolean(rawText),
-            textEmpty: !rawText?.trim(),
-            textLength: rawText?.length ?? 0,
-            textHead: typeof rawText === "string" ? rawText.slice(0, 160) : undefined,
+            textLength: data.text?.length ?? 0,
           });
         }
 
-        if (fetchGen !== integrationReflectionFetchGenRef.current) return;
+        if (ac.signal.aborted || fetchGen !== integrationReflectionFetchGenRef.current) return;
+        const live = sessionRef.current;
+        if (live.step !== "integration_reflection" || live.reflectionStatus !== "loading") return;
 
-        if (data.ok && data.text) {
+        const outcome = classifyAssistantPromptResponse(data);
+
+        if (outcome.kind === "success") {
+          clearIntegrationOverloadTimer();
+          integrationOverloadAttemptsRef.current = 0;
           setReflectionOverloadRetry(false);
-          dispatch({ type: "REFLECTION_SUCCESS", text: stripClinicalMarkdown(data.text) });
+          dispatch({ type: "REFLECTION_SUCCESS", text: stripClinicalMarkdown(outcome.text) });
           return;
         }
 
-        const isIntegrationOverload =
-          data.code === "TEMPORARY_AI_OVERLOAD" || data.retryable === true;
-
-        if (isIntegrationOverload) {
+        if (outcome.kind === "overload") {
           if (process.env.NODE_ENV === "development") {
             console.info("[INTEGRATION_REFLECTION_DEV] overload hold — no REFLECTION_ERROR", {
               code: data.code,
+              status: data.status,
               retryable: data.retryable,
+              attempt: integrationOverloadAttemptsRef.current,
             });
           }
-          setReflectionOverloadRetry(true);
+          reflectionKeyRef.current = null;
+
+          if (integrationOverloadAttemptsRef.current < ASSISTANT_AUTO_OVERLOAD_ATTEMPTS) {
+            setReflectionOverloadRetry(false);
+            integrationOverloadAttemptsRef.current += 1;
+            clearIntegrationOverloadTimer();
+            const delay =
+              ASSISTANT_AUTO_OVERLOAD_BASE_MS * integrationOverloadAttemptsRef.current;
+            integrationOverloadTimerRef.current = setTimeout(() => {
+              integrationOverloadTimerRef.current = null;
+              reflectionKeyRef.current = null;
+              setIntegrationAiRetryTick((t) => t + 1);
+            }, delay);
+          } else {
+            setReflectionOverloadRetry(true);
+          }
           return;
         }
 
-        if (process.env.NODE_ENV === "development") {
-          console.info(
-            "[INTEGRATION_REFLECTION_DEV] REFLECTION_ERROR dispatch next (browser console)",
-            {
-              reason:
-                !data.ok
-                  ? "ok_false_or_missing"
-                  : !data.text
-                    ? "text_falsy"
-                    : "text_empty_after_trim_implied",
-              httpStatus: res.status,
-              ok: data.ok,
-              code: data.code,
-              message: data.message,
-              responseKeys,
-              textLength: rawText?.length ?? 0,
-              textEmpty: !rawText?.trim(),
-            }
-          );
-        }
-
+        clearIntegrationOverloadTimer();
+        integrationOverloadAttemptsRef.current = 0;
         setReflectionOverloadRetry(false);
         dispatch({
           type: "REFLECTION_ERROR",
@@ -1567,11 +1610,14 @@ export default function AssistantPage() {
             "Не удалось загрузить данные. Ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       } catch (e: unknown) {
-        if (fetchGen !== integrationReflectionFetchGenRef.current) return;
+        if (ac.signal.aborted || fetchGen !== integrationReflectionFetchGenRef.current) return;
+        if (sessionRef.current.step !== "integration_reflection") return;
 
         if (process.env.NODE_ENV === "development") {
           console.info("[INTEGRATION_REFLECTION_DEV] request failed", e);
         }
+        clearIntegrationOverloadTimer();
+        integrationOverloadAttemptsRef.current = 0;
         setReflectionOverloadRetry(false);
         dispatch({
           type: "REFLECTION_ERROR",
@@ -1580,7 +1626,11 @@ export default function AssistantPage() {
         });
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- узкий перечень без полного session (лишние вызовы модели); reflectionOverloadRetry: иначе «Повторить» не перезапускает fetch при том же reflectionStatus=loading
+
+    return () => {
+      ac.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- integrationAiRetryTick: bounded auto-retry after overload without toggling reflectionStatus
   }, [
     session.step,
     session.reflectionStatus,
@@ -1595,7 +1645,25 @@ export default function AssistantPage() {
     session.therapistOtherMethods,
     session.supervisorStyle,
     session.focusLabel,
-    reflectionOverloadRetry,
+    integrationAiRetryTick,
+    clearIntegrationOverloadTimer,
+    dispatch,
+  ]);
+
+  /* Resumed snapshot may land on step 3 with idle status — kick fetch instead of empty UI. */
+  useEffect(() => {
+    if (session.step !== "closing_step3" || session.closingIntegrationStatus !== "idle") return;
+    const req = session.supervisionRequest.trim();
+    const s1 = session.closingStep1Answer?.trim() ?? "";
+    const takeaway = session.closingTherapistTakeaway.trim();
+    if (!req || !s1 || !takeaway) return;
+    dispatch({ type: "CLOSING_INTEGRATION_LOADING" });
+  }, [
+    session.step,
+    session.closingIntegrationStatus,
+    session.supervisionRequest,
+    session.closingStep1Answer,
+    session.closingTherapistTakeaway,
     dispatch,
   ]);
 
@@ -1603,6 +1671,8 @@ export default function AssistantPage() {
   useEffect(() => {
     if (session.step !== "closing_step3" || session.closingIntegrationStatus !== "loading") {
       closingIntegrationKeyRef.current = null;
+      closingOverloadAttemptsRef.current = 0;
+      clearClosingOverloadTimer();
       return;
     }
 
@@ -1651,6 +1721,7 @@ export default function AssistantPage() {
     closingIntegrationKeyRef.current = sig;
 
     const fetchGen = ++closingIntegrationFetchGenRef.current;
+    const ac = new AbortController();
 
     void (async () => {
       try {
@@ -1658,41 +1729,50 @@ export default function AssistantPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt }),
+          signal: ac.signal,
         });
-        if (fetchGen !== closingIntegrationFetchGenRef.current) return;
+        if (ac.signal.aborted || fetchGen !== closingIntegrationFetchGenRef.current) return;
 
-        const data = (await res.json().catch(() => null)) as
-          | {
-              ok?: boolean;
-              text?: string;
-              message?: string;
-              code?: string;
-              status?: string;
-              retryable?: boolean;
-            }
-          | null;
+        const data = (await res.json().catch(() => null)) as AssistantApiPayload | null;
 
-        if (fetchGen !== closingIntegrationFetchGenRef.current) return;
+        if (ac.signal.aborted || fetchGen !== closingIntegrationFetchGenRef.current) return;
+        const live = sessionRef.current;
+        if (live.step !== "closing_step3" || live.closingIntegrationStatus !== "loading") return;
 
-        if (data?.ok && data.text) {
+        const outcome = classifyAssistantPromptResponse(data);
+
+        if (outcome.kind === "success") {
+          clearClosingOverloadTimer();
+          closingOverloadAttemptsRef.current = 0;
           setClosingIntegrationOverloadRetry(false);
           dispatch({
             type: "CLOSING_INTEGRATION_SUCCESS",
-            text: stripClinicalMarkdown(data.text),
+            text: stripClinicalMarkdown(outcome.text),
           });
           return;
         }
 
-        const isClosingOverload =
-          data?.code === "TEMPORARY_AI_OVERLOAD" ||
-          data?.status === "temporary_ai_overload" ||
-          data?.retryable === true;
+        if (outcome.kind === "overload") {
+          closingIntegrationKeyRef.current = null;
 
-        if (isClosingOverload) {
-          setClosingIntegrationOverloadRetry(true);
+          if (closingOverloadAttemptsRef.current < ASSISTANT_AUTO_OVERLOAD_ATTEMPTS) {
+            setClosingIntegrationOverloadRetry(false);
+            closingOverloadAttemptsRef.current += 1;
+            clearClosingOverloadTimer();
+            const delay = ASSISTANT_AUTO_OVERLOAD_BASE_MS * closingOverloadAttemptsRef.current;
+            closingOverloadTimerRef.current = setTimeout(() => {
+              closingOverloadTimerRef.current = null;
+              closingIntegrationKeyRef.current = null;
+              setClosingAiRetryTick((t) => t + 1);
+            }, delay);
+          } else {
+            setClosingIntegrationOverloadRetry(true);
+          }
           return;
         }
 
+        clearClosingOverloadTimer();
+        closingOverloadAttemptsRef.current = 0;
         setClosingIntegrationOverloadRetry(false);
         dispatch({
           type: "CLOSING_INTEGRATION_ERROR",
@@ -1700,8 +1780,11 @@ export default function AssistantPage() {
             "Не удалось загрузить данные. Ваши ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       } catch {
-        if (fetchGen !== closingIntegrationFetchGenRef.current) return;
+        if (ac.signal.aborted || fetchGen !== closingIntegrationFetchGenRef.current) return;
+        if (sessionRef.current.step !== "closing_step3") return;
 
+        clearClosingOverloadTimer();
+        closingOverloadAttemptsRef.current = 0;
         setClosingIntegrationOverloadRetry(false);
         dispatch({
           type: "CLOSING_INTEGRATION_ERROR",
@@ -1710,6 +1793,10 @@ export default function AssistantPage() {
         });
       }
     })();
+
+    return () => {
+      ac.abort();
+    };
   }, [
     session.step,
     session.closingIntegrationStatus,
@@ -1725,7 +1812,8 @@ export default function AssistantPage() {
     session.therapistOtherMethods,
     session.supervisorStyle,
     session.focusLabel,
-    closingIntegrationOverloadRetry,
+    closingAiRetryTick,
+    clearClosingOverloadTimer,
     dispatch,
   ]);
 
@@ -2831,11 +2919,7 @@ export default function AssistantPage() {
                     type="button"
                     tone="secondary"
                     className="w-full sm:w-auto"
-                    onClick={() => {
-                      setReflectionOverloadRetry(false);
-                      reflectionKeyRef.current = null;
-                      dispatch({ type: "REFLECTION_LOADING" });
-                    }}
+                    onClick={retryIntegrationReflectionFetch}
                   >
                     Повторить
                   </Button>
@@ -2882,8 +2966,7 @@ export default function AssistantPage() {
                         tone="secondary"
                         className="w-full sm:w-auto"
                         onClick={() => {
-                          setReflectionOverloadRetry(false);
-                          reflectionKeyRef.current = null;
+                          retryIntegrationReflectionFetch();
                           dispatch({ type: "REFLECTION_LOADING" });
                         }}
                       >
@@ -2968,11 +3051,7 @@ export default function AssistantPage() {
                     type="button"
                     tone="secondary"
                     className="w-full sm:w-auto"
-                    onClick={() => {
-                      setClosingIntegrationOverloadRetry(false);
-                      closingIntegrationKeyRef.current = null;
-                      dispatch({ type: "CLOSING_INTEGRATION_LOADING" });
-                    }}
+                    onClick={retryClosingIntegrationFetch}
                   >
                     Повторить
                   </Button>
@@ -3021,8 +3100,7 @@ export default function AssistantPage() {
                       tone="secondary"
                       className="w-full sm:w-auto"
                       onClick={() => {
-                        setClosingIntegrationOverloadRetry(false);
-                        closingIntegrationKeyRef.current = null;
+                        retryClosingIntegrationFetch();
                         dispatch({ type: "CLOSING_INTEGRATION_LOADING" });
                       }}
                     >
@@ -3112,8 +3190,7 @@ export default function AssistantPage() {
                         tone="secondary"
                         className="w-full sm:w-auto"
                         onClick={() => {
-                          setReflectionOverloadRetry(false);
-                          reflectionKeyRef.current = null;
+                          retryIntegrationReflectionFetch();
                           dispatch({ type: "REFLECTION_LOADING" });
                         }}
                       >
@@ -3638,10 +3715,20 @@ export default function AssistantPage() {
                 </div>
               )}
               {authUser && finishSaveStatus === "error" && (
-                <p className="rounded-xl border border-[color:color-mix(in srgb,var(--accent-sand)40%,var(--border))] bg-[color:color-mix(in srgb,var(--accent-sand)10%,white)] px-4 py-3 text-sm text-[color:var(--muted)]">
-                  Не удалось сохранить кейс на сервере. Попробуйте позже — разбор уже в истории сессии в
-                  браузере.
-                </p>
+                <div className="space-y-3">
+                  <p className="rounded-xl border border-[color:color-mix(in srgb,var(--accent-sand)40%,var(--border))] bg-[color:color-mix(in srgb,var(--accent-sand)10%,white)] px-4 py-3 text-sm text-[color:var(--muted)]">
+                    Не удалось сохранить кейс на сервере. Разбор остаётся в истории сессии в браузере — можно
+                    повторить сохранение.
+                  </p>
+                  <Button
+                    type="button"
+                    tone="secondary"
+                    className="w-full sm:w-auto"
+                    onClick={() => setFinishSaveRetryTick((t) => t + 1)}
+                  >
+                    Повторить сохранение
+                  </Button>
+                </div>
               )}
               {authUser && finishSaveStatus === "skipped" && session.remoteCaseId == null && (
                 <p className="text-sm leading-relaxed text-[color:var(--muted)]">
