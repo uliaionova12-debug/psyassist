@@ -83,17 +83,7 @@ export function isPersistenceUnavailableCode(code: PersistenceFailureCode | unde
   return code === "SUPABASE_DISABLED" || code === "NO_SESSION";
 }
 
-/** Refresh client session cookies, then verify server sees the user (before finish save/complete). */
-export async function persistence_ensure_server_auth(): Promise<boolean> {
-  const client = createSupabaseBrowserClientOptional();
-  if (client) {
-    const {
-      data: { session },
-    } = await client.auth.getSession();
-    if (session) {
-      await client.auth.refreshSession().catch(() => {});
-    }
-  }
+async function persistence_probe_server_auth(): Promise<boolean> {
   try {
     const res = await fetch("/api/user/profile", { credentials: "include", cache: "no-store" });
     const data = (await res.json()) as { ok?: boolean };
@@ -101,6 +91,44 @@ export async function persistence_ensure_server_auth(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Sync browser session → server cookies, then verify API routes see the user (finish save/complete). */
+export async function persistence_ensure_server_auth(): Promise<boolean> {
+  if (await persistence_probe_server_auth()) return true;
+
+  const client = createSupabaseBrowserClientOptional();
+  if (!client) return false;
+
+  let session = (await client.auth.getSession()).data.session;
+  if (!session?.access_token || !session.refresh_token) {
+    const refreshed = await client.auth.refreshSession();
+    session = refreshed.data.session;
+  }
+  if (!session?.access_token || !session.refresh_token) return false;
+
+  const tokens = {
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+  };
+
+  await client.auth.setSession(tokens).catch(() => {});
+
+  try {
+    const syncRes = await fetch("/api/auth/sync-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      cache: "no-store",
+      body: JSON.stringify(tokens),
+    });
+    const syncData = (await syncRes.json()) as { ok?: boolean };
+    if (!syncData.ok) return false;
+  } catch {
+    return false;
+  }
+
+  return persistence_probe_server_auth();
 }
 
 export async function persistence_supervision_start(): Promise<
