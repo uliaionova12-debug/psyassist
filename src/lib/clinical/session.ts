@@ -22,6 +22,7 @@ import {
   THERAPIST_SPECIALIZATION_OTHER,
 } from "@/lib/clinical/therapist-profile";
 import { isSupervisorStyleLabel } from "@/lib/clinical/supervisor-style";
+import { isTensionInterruptEnabled } from "@/lib/clinical/tension-feature-flag";
 
 export type NavTailPhase = "psychotype" | "supervision_followup";
 
@@ -724,6 +725,7 @@ export function supervisionReducer(
       };
 
     case "TENSION_INTERRUPT_START": {
+      if (!isTensionInterruptEnabled()) return state;
       if (state.tensionCompleted) return state;
       if (!state.focusKey || !state.sessionDepth) return state;
       const bank = getQuestionsForFocus(state.focusKey);

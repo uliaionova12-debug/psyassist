@@ -72,6 +72,7 @@ import {
   type IntegrationReflectionAnswerItem,
 } from "@/lib/clinical/reflection";
 import { buildPremiumSessionPlainExport } from "@/lib/clinical/session-plain-export";
+import { isTensionInterruptEnabled } from "@/lib/clinical/tension-feature-flag";
 import { detect_tension_signals, TENSION_STOP_STEP_ONE_OPTIONS } from "@/lib/clinical/tension";
 import {
   classifyAssistantPromptResponse,
@@ -828,6 +829,9 @@ export default function AssistantPage() {
         }
       }
 
+      if (action.type === "TENSION_INTERRUPT_START" && !isTensionInterruptEnabled()) {
+        return;
+      }
       if (action.type === "TENSION_INTERRUPT_START" && s.tensionCompleted) {
         return;
       }
@@ -838,7 +842,7 @@ export default function AssistantPage() {
           payload: { persistenceCaseId: s.remoteCaseId ?? undefined },
         });
       }
-      if (action.type === "TENSION_SUBMIT_PROBE") {
+      if (action.type === "TENSION_SUBMIT_PROBE" && isTensionInterruptEnabled()) {
         void trackEvent({
           eventName: PRODUCT_EVENTS.tension_probe_answered,
           step: String((s.tensionPending?.moduleIdx ?? s.questionModuleIdx) + 1),
@@ -1884,6 +1888,7 @@ export default function AssistantPage() {
   }, [session.step]);
 
   useEffect(() => {
+    if (!isTensionInterruptEnabled()) return;
     if (session.step !== "tension_stop_loading") return;
     const pending = session.tensionPending;
     if (!pending) return;
@@ -1968,6 +1973,7 @@ export default function AssistantPage() {
   ]);
 
   useEffect(() => {
+    if (!isTensionInterruptEnabled()) return;
     if (session.step !== "tension_hypothesis_loading") return;
     const pending = session.tensionPending;
     if (!pending?.probeAnswer) return;
@@ -2131,6 +2137,7 @@ export default function AssistantPage() {
     const bankTotal = getTotalQuestionCount(session.focusKey, session.sessionDepth);
     const hasNextBankQuestion = session.questionModuleIdx + 1 < bankTotal;
     if (
+      isTensionInterruptEnabled() &&
       session.supervisionAnswers.length > 0 &&
       !session.tensionCompleted &&
       hasNextBankQuestion &&
@@ -2797,7 +2804,7 @@ export default function AssistantPage() {
                 <h1 className="text-2xl font-semibold tracking-[-0.03em]">
                   Вопрос {session.questionModuleIdx + 1} из {totalQs}
                 </h1>
-                {session.tensionFlowError.trim() ? (
+                {isTensionInterruptEnabled() && session.tensionFlowError.trim() ? (
                   <div className="rounded-xl border border-[color:color-mix(in srgb, var(--accent-sand) 40%, var(--border))] bg-[color:color-mix(in srgb, var(--accent-sand) 10%, white)] px-4 py-3 text-sm leading-relaxed text-[color:var(--muted)] whitespace-pre-line">
                     {session.tensionFlowError.trim()}
                   </div>
@@ -2833,7 +2840,9 @@ export default function AssistantPage() {
               </div>
             )}
 
-          {session.step === "tension_stop_loading" && session.tensionPending && (
+          {isTensionInterruptEnabled() &&
+            session.step === "tension_stop_loading" &&
+            session.tensionPending && (
             <div className="space-y-5">
               <h1 className="text-2xl font-semibold tracking-[-0.03em]">
                 Напряжение в поле — короткая остановка
@@ -2850,7 +2859,9 @@ export default function AssistantPage() {
             </div>
           )}
 
-          {session.step === "tension_stop" && session.tensionPending && (
+          {isTensionInterruptEnabled() &&
+            session.step === "tension_stop" &&
+            session.tensionPending && (
             <div className="space-y-5">
               <h1 className="text-2xl font-semibold tracking-[-0.03em]">
                 Напряжение в поле — короткая остановка
@@ -2902,7 +2913,9 @@ export default function AssistantPage() {
             </div>
           )}
 
-          {session.step === "tension_hypothesis_loading" && session.tensionPending && (
+          {isTensionInterruptEnabled() &&
+            session.step === "tension_hypothesis_loading" &&
+            session.tensionPending && (
             <div className="space-y-5">
               <h1 className="text-2xl font-semibold tracking-[-0.03em]">Рабочая гипотеза</h1>
               <p className="text-sm leading-relaxed text-[color:var(--muted)]">
