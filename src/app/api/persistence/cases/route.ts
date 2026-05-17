@@ -10,7 +10,8 @@ import { caseSummaryRowToSupervisionSummary } from "@/lib/persistence/supervisio
 import { createSupabasePersistenceClient } from "@/lib/supabase/server-persistence";
 
 export async function GET() {
-  const supabase = await createSupabasePersistenceClient();
+  const response = NextResponse.json({ ok: false as const, code: "NO_SESSION" });
+  const supabase = await createSupabasePersistenceClient(response.cookies);
   if (!supabase) {
     return NextResponse.json({ ok: false as const, code: "SUPABASE_DISABLED" });
   }
@@ -21,20 +22,23 @@ export async function GET() {
   } = await supabase.auth.getUser();
 
   if (authErr || !user) {
-    return NextResponse.json({ ok: false as const, code: "NO_SESSION" });
+    return NextResponse.json({ ok: false as const, code: "NO_SESSION" }, { headers: response.headers });
   }
 
   try {
     const rows = await get_user_cases(supabase, user.id, 50);
-    return NextResponse.json({
-      ok: true as const,
-      cases: rows.map(caseSummaryRowToSupervisionSummary),
-    });
+    return NextResponse.json(
+      {
+        ok: true as const,
+        cases: rows.map(caseSummaryRowToSupervisionSummary),
+      },
+      { headers: response.headers }
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
       { ok: false as const, code: "LIST_FAILED", message: msg },
-      { status: 500 }
+      { status: 500, headers: response.headers }
     );
   }
 }
