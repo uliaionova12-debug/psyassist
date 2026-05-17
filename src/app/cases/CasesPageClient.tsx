@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
@@ -37,12 +36,32 @@ function statusRu(s: string | null): string {
   return "Активен";
 }
 
-type Props = {
-  serverHasSession: boolean;
-};
+function CasesListSkeleton() {
+  const pulse = "animate-pulse rounded-md bg-[color:var(--border)]";
+  return (
+    <ul
+      className="mt-8 grid list-none grid-cols-1 gap-4 p-0 md:grid-cols-2"
+      aria-busy="true"
+      aria-label="Загрузка списка кейсов"
+    >
+      {[0, 1].map((i) => (
+        <li key={i}>
+          <Card className="flex h-full flex-col gap-4 p-5 sm:p-6">
+            <div className={`h-6 w-2/3 ${pulse}`} />
+            <div className={`h-4 w-1/3 ${pulse}`} />
+            <div className={`h-16 w-full ${pulse}`} />
+            <div className="mt-auto flex gap-2">
+              <div className={`h-10 w-28 ${pulse}`} />
+              <div className={`h-10 w-24 ${pulse}`} />
+            </div>
+          </Card>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
-export function CasesPageClient({ serverHasSession }: Props) {
-  const router = useRouter();
+export function CasesPageClient() {
   const [authReady, setAuthReady] = useState(false);
   const [browserHasUser, setBrowserHasUser] = useState(false);
   const [cases, setCases] = useState<SupervisionCaseSummary[]>([]);
@@ -83,24 +102,21 @@ export function CasesPageClient({ serverHasSession }: Props) {
   const load = useCallback(async () => {
     if (!authReady) return;
 
+    if (!browserHasUser) {
+      setError("Войдите в аккаунт, чтобы увидеть сохранённые кейсы.");
+      setCases([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
-    if (browserHasUser) {
-      const ensured = await persistence_ensure_server_auth();
-      if (!ensured) {
-        setError(
-          "Вход выполнен в браузере, но сессия не синхронизирована с сервером. Обновите страницу и попробуйте снова."
-        );
-        setCases([]);
-        setLoading(false);
-        return;
-      }
-      if (!serverHasSession) {
-        router.refresh();
-      }
-    } else if (!serverHasSession) {
-      setError("Войдите в аккаунт, чтобы увидеть сохранённые кейсы.");
+    const ensured = await persistence_ensure_server_auth();
+    if (!ensured) {
+      setError(
+        "Вход выполнен в браузере, но сессия не синхронизирована с сервером. Обновите страницу и попробуйте снова."
+      );
       setCases([]);
       setLoading(false);
       return;
@@ -121,7 +137,7 @@ export function CasesPageClient({ serverHasSession }: Props) {
     }
     setCases(r.cases);
     setLoading(false);
-  }, [authReady, browserHasUser, router, serverHasSession]);
+  }, [authReady, browserHasUser]);
 
   useEffect(() => {
     void load();
@@ -130,6 +146,8 @@ export function CasesPageClient({ serverHasSession }: Props) {
   const visible = showArchived
     ? cases.filter((c) => c.status === "archived")
     : cases.filter((c) => c.status !== "archived");
+
+  const showSkeleton = !authReady || loading;
 
   const openDetail = async (id: string) => {
     setDetailLoading(true);
@@ -171,13 +189,9 @@ export function CasesPageClient({ serverHasSession }: Props) {
           </div>
         </div>
 
-        {loading && (
-          <p className="mt-8 text-sm text-[color:var(--muted)]" aria-live="polite">
-            Загружаем список…
-          </p>
-        )}
+        {showSkeleton && <CasesListSkeleton />}
 
-        {!loading && error && (
+        {authReady && !loading && error && (
           <Card className="mt-8 p-6">
             <p className="text-sm leading-relaxed text-[color:var(--muted)]">{error}</p>
             {error.includes("Войдите") ? (
@@ -196,7 +210,7 @@ export function CasesPageClient({ serverHasSession }: Props) {
           </Card>
         )}
 
-        {!loading && !error && visible.length === 0 && (
+        {authReady && browserHasUser && !loading && !error && visible.length === 0 && (
           <Card className="mt-8 p-6">
             <p className="text-sm text-[color:var(--muted)]">
               {showArchived
@@ -213,7 +227,7 @@ export function CasesPageClient({ serverHasSession }: Props) {
           </Card>
         )}
 
-        {!loading && !error && visible.length > 0 && (
+        {authReady && browserHasUser && !loading && !error && visible.length > 0 && (
           <ul className="mt-8 grid list-none grid-cols-1 gap-4 p-0 md:grid-cols-2">
             {visible.map((c) => (
               <li key={c.id}>
