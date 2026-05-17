@@ -23,6 +23,8 @@ const BodySchema = z.object({
 });
 
 export async function POST(req: Request, ctx: RouteParams) {
+  console.info("[cases/save] reached");
+
   const supabase = await createSupabaseServerClientOptional();
   if (!supabase) {
     return NextResponse.json({ ok: false as const, code: "SUPABASE_DISABLED" });
@@ -32,6 +34,8 @@ export async function POST(req: Request, ctx: RouteParams) {
     data: { user },
     error: authErr,
   } = await supabase.auth.getUser();
+
+  console.info("[cases/save] user id or NO_SESSION", user?.id ?? "NO_SESSION");
 
   if (authErr || !user) {
     return NextResponse.json({ ok: false as const, code: "NO_SESSION" });

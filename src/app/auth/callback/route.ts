@@ -4,16 +4,17 @@ import { NextResponse } from "next/server";
 
 import { sanitizeInternalNextPath } from "@/lib/auth/redirect-urls";
 import { getSiteUrlFromRequest } from "@/lib/auth/site-url";
+import { createSupabaseCookieMethods } from "@/lib/supabase/cookie-methods";
+import { getSupabasePublicEnv } from "@/lib/supabase/env";
 import { ensureProfileExists } from "@/lib/user/profile";
 
 export async function GET(request: Request) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const env = getSupabasePublicEnv();
   const siteUrl = getSiteUrlFromRequest(request);
   const requestUrl = new URL(request.url);
   const next = sanitizeInternalNextPath(requestUrl.searchParams.get("next"));
 
-  if (!url || !anonKey) {
+  if (!env) {
     return NextResponse.redirect(`${siteUrl}/login?error=supabase_disabled`);
   }
 
@@ -25,21 +26,8 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
   const redirectResponse = NextResponse.redirect(`${siteUrl}${next}`);
 
-  const supabase = createServerClient(url, anonKey, {
-    cookies: {
-      getAll() {
-        return cookieStore.getAll();
-      },
-      setAll(cookiesToSet) {
-        try {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            redirectResponse.cookies.set(name, value, options);
-          });
-        } catch {
-          /* cookie mutation can fail in some runtimes */
-        }
-      },
-    },
+  const supabase = createServerClient(env.url, env.anonKey, {
+    cookies: createSupabaseCookieMethods(cookieStore, redirectResponse.cookies),
   });
 
   try {

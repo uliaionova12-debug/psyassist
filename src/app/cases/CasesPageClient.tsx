@@ -7,7 +7,9 @@ import { ButtonLink } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/ui/Container";
 import { stripClinicalMarkdown } from "@/lib/clinical/markdown-strip";
+import { syncBrowserSessionToServer } from "@/lib/auth/sync-browser-session";
 import {
+  persistence_ensure_server_auth,
   persistence_get_supervision_case,
   persistence_list_cases,
   persistence_patch_case_status,
@@ -30,7 +32,11 @@ function statusRu(s: string | null): string {
   return "Активен";
 }
 
-export function CasesPageClient() {
+type Props = {
+  serverHasSession: boolean;
+};
+
+export function CasesPageClient({ serverHasSession }: Props) {
   const [cases, setCases] = useState<SupervisionCaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +48,20 @@ export function CasesPageClient() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+
+    if (!serverHasSession) {
+      const synced = await syncBrowserSessionToServer();
+      if (!synced.ok) {
+        const ensured = await persistence_ensure_server_auth();
+        if (!ensured) {
+          setError("Войдите в аккаунт, чтобы увидеть сохранённые кейсы.");
+          setCases([]);
+          setLoading(false);
+          return;
+        }
+      }
+    }
+
     const r = await persistence_list_cases();
     if (!r.ok) {
       setError(
@@ -57,7 +77,7 @@ export function CasesPageClient() {
     }
     setCases(r.cases);
     setLoading(false);
-  }, []);
+  }, [serverHasSession]);
 
   useEffect(() => {
     void load();

@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AuthVaultPlaceholder } from "@/components/auth/AuthVaultPlaceholder";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/ui/Container";
 import { buildAuthCallbackAbsoluteUrl } from "@/lib/auth/redirect-urls";
+import { syncBrowserSessionToServer } from "@/lib/auth/sync-browser-session";
 import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
 
 export function LoginClient() {
@@ -28,6 +29,22 @@ export function LoginClient() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!supabase) return;
+    let cancelled = false;
+    void (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session || cancelled) return;
+      const synced = await syncBrowserSessionToServer();
+      if (!synced.ok || cancelled) return;
+      router.replace(nextPath);
+      router.refresh();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, router, nextPath]);
+
   if (!supabase) {
     return <AuthVaultPlaceholder />;
   }
@@ -38,9 +55,15 @@ export function LoginClient() {
     setMessage(null);
     setBusy(true);
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-    setBusy(false);
     if (error) {
+      setBusy(false);
       setMessage(error.message);
+      return;
+    }
+    const synced = await syncBrowserSessionToServer();
+    setBusy(false);
+    if (!synced.ok) {
+      setMessage("Вход выполнен, но сессия не синхронизирована с сервером. Обновите страницу и попробуйте снова.");
       return;
     }
     router.replace(nextPath);

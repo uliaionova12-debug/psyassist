@@ -2,7 +2,7 @@
  * Browser helpers for PsyAssist persistence API routes (cookie session → Supabase).
  */
 
-import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
+import { syncBrowserSessionToServer } from "@/lib/auth/sync-browser-session";
 import type { AssistantSessionSnapshotV1 } from "@/lib/persistence/assistant-session-snapshot";
 import type { SupervisionCase, SupervisionCaseSummary } from "@/lib/persistence/types";
 
@@ -96,39 +96,8 @@ async function persistence_probe_server_auth(): Promise<boolean> {
 /** Sync browser session → server cookies, then verify API routes see the user (finish save/complete). */
 export async function persistence_ensure_server_auth(): Promise<boolean> {
   if (await persistence_probe_server_auth()) return true;
-
-  const client = createSupabaseBrowserClientOptional();
-  if (!client) return false;
-
-  let session = (await client.auth.getSession()).data.session;
-  if (!session?.access_token || !session.refresh_token) {
-    const refreshed = await client.auth.refreshSession();
-    session = refreshed.data.session;
-  }
-  if (!session?.access_token || !session.refresh_token) return false;
-
-  const tokens = {
-    access_token: session.access_token,
-    refresh_token: session.refresh_token,
-  };
-
-  await client.auth.setSession(tokens).catch(() => {});
-
-  try {
-    const syncRes = await fetch("/api/auth/sync-session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      cache: "no-store",
-      body: JSON.stringify(tokens),
-    });
-    const syncData = (await syncRes.json()) as { ok?: boolean };
-    if (!syncData.ok) return false;
-  } catch {
-    return false;
-  }
-
-  return persistence_probe_server_auth();
+  const synced = await syncBrowserSessionToServer();
+  return synced.ok;
 }
 
 export async function persistence_supervision_start(): Promise<

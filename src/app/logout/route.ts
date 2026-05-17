@@ -1,12 +1,25 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerClient } from "@supabase/ssr";
 
-import { createSupabaseServerClientOptional } from "@/lib/supabase/server-optional";
+import { createSupabaseCookieMethods } from "@/lib/supabase/cookie-methods";
+import { getSupabasePublicEnv } from "@/lib/supabase/env";
 
 export async function GET(request: Request) {
   const { origin } = new URL(request.url);
-  const supabase = await createSupabaseServerClientOptional();
-  if (supabase) {
-    await supabase.auth.signOut();
+  const redirectResponse = NextResponse.redirect(`${origin}/`, { status: 302 });
+
+  const env = getSupabasePublicEnv();
+  if (!env) {
+    return redirectResponse;
   }
-  return NextResponse.redirect(`${origin}/`, { status: 302 });
+
+  const cookieStore = await cookies();
+  const supabase = createServerClient(env.url, env.anonKey, {
+    cookies: createSupabaseCookieMethods(cookieStore, redirectResponse.cookies),
+  });
+
+  await supabase.auth.signOut();
+
+  return redirectResponse;
 }
