@@ -322,8 +322,8 @@ export default function AssistantPage() {
   const [chatAnalysisImages, setChatAnalysisImages] = useState<Array<{ mimeType: string; base64: string }>>([]);
 
   const [billingProfile, setBillingProfile] = useState<UserBillingProfile>(DEFAULT_BILLING_PROFILE);
-  /** For logged-in users, gates stay on DEFAULT until `/api/user/profile` succeeds once (server replaces stale localStorage). */
-  const [billingHydrated, setBillingHydrated] = useState(true);
+  /** Authed users: false until GET /api/user/profile completes (avoids paywall from stale cache before server truth). */
+  const [billingHydrated, setBillingHydrated] = useState(false);
   const lastHandledAuthUserIdRef = useRef<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authUser, setAuthUser] = useState<{ id: string } | null>(null);
@@ -2050,7 +2050,10 @@ export default function AssistantPage() {
   const gateFreeRetention =
     billingForProductGates.planType === "free" && billingForProductGates.freeIntroUsed;
 
-  const caseStartBlocked = !canStartCase(billingForProductGates);
+  const caseStartBlocked =
+    Boolean(authUser) && (!authReady || !billingHydrated)
+      ? false
+      : !canStartCase(billingForProductGates);
 
   const showFinishedPaywall =
     caseStartBlocked &&
