@@ -79,6 +79,7 @@ import {
   persistence_append_case_context,
   persistence_complete_case_session,
   persistence_get_case_resume,
+  persistence_save_case,
   persistence_supervision_finish,
 } from "@/lib/persistence/assistant-client";
 import {
@@ -624,20 +625,61 @@ export default function AssistantPage() {
 
   useEffect(() => {
     if (session.step !== "finished" || !authUser?.id) return;
-    const rid = session.remoteCaseId;
-    const onceKey = `finished-auth:${authUser.id}:${rid ?? "norid"}`;
+    const onceKey = `finished-auth:${authUser.id}`;
     if (persistFinishOnceRef.current === onceKey) return;
     persistFinishOnceRef.current = onceKey;
 
-    const pre = preFinishSessionRef.current;
-    if (rid != null && pre != null) {
-      setFinishSaveStatus("saving");
-      const meta = deriveCaseCardMeta(pre);
-      void persistence_complete_case_session(rid, {
+    let snapshotSession: SupervisionSession | null = preFinishSessionRef.current;
+    if (snapshotSession == null) {
+      try {
+        snapshotSession = JSON.parse(JSON.stringify(sessionRef.current)) as SupervisionSession;
+      } catch {
+        snapshotSession = null;
+      }
+    }
+    if (snapshotSession == null) {
+      setFinishSaveStatus("skipped");
+      return;
+    }
+
+    setFinishSaveStatus("saving");
+    const meta = deriveCaseCardMeta(snapshotSession);
+
+    void (async () => {
+      let caseId = sessionRef.current.remoteCaseId;
+      if (caseId == null) {
+        const alias = snapshotSession!.intake.client_alias?.trim();
+        const dur = snapshotSession!.intake.therapy_duration?.trim();
+        const narrative = snapshotSession!.fullNarrative.trim();
+        if (!narrative || !alias || !dur) {
+          setFinishSaveStatus("skipped");
+          return;
+        }
+        const saved = await persistence_save_case({
+          userName: null,
+          caseTitle: alias,
+          clientName: alias,
+          firstSessionDate: dur,
+          initialCase: narrative,
+        });
+        if (!saved.ok) {
+          setFinishSaveStatus("error");
+          return;
+        }
+        caseId = saved.caseId;
+        rawDispatch({ type: "SET_REMOTE_CASE_ID", caseId });
+        await flushPendingCaseAppends(
+          caseId,
+          pendingAppendsRef,
+          persistenceCtx.notePersistenceUnavailable
+        );
+      }
+
+      const r = await persistence_complete_case_session(caseId, {
         snapshot: {
           v: 1,
           savedAt: Date.now(),
-          session: pre,
+          session: snapshotSession!,
           pendingAppends: pendingAppendsRef.current.slice(),
         },
         focus: meta.focus,
@@ -646,31 +688,28 @@ export default function AssistantPage() {
         current_question: meta.current_question,
         duration_minutes: meta.duration_minutes,
         last_insight: meta.last_insight,
-        case_title: pre.intake.client_alias?.trim() ?? null,
-      }).then((r) => {
-        if (r.ok) {
-          setFinishSaveStatus("success");
-          preFinishSessionRef.current = null;
-          const bp = billingProfileRef.current;
-          if (bp.planType === "free" && !bp.freeIntroUsed) {
-            freeIntroCompleteTrackedRef.current = true;
-            persistBilling({ ...bp, freeIntroUsed: true });
-            void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
-          }
-        } else {
-          setFinishSaveStatus("error");
-        }
+        case_title: snapshotSession!.intake.client_alias?.trim() ?? null,
       });
-    } else {
-      setFinishSaveStatus("skipped");
-      const bp = billingProfileRef.current;
-      if (rid == null && bp.planType === "free" && !bp.freeIntroUsed) {
-        freeIntroCompleteTrackedRef.current = true;
-        persistBilling({ ...bp, freeIntroUsed: true });
-        void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
+      if (r.ok) {
+        setFinishSaveStatus("success");
+        preFinishSessionRef.current = null;
+        const bp = billingProfileRef.current;
+        if (bp.planType === "free" && !bp.freeIntroUsed) {
+          freeIntroCompleteTrackedRef.current = true;
+          persistBilling({ ...bp, freeIntroUsed: true });
+          void trackEvent({ eventName: PRODUCT_EVENTS.free_intro_completed });
+        }
+      } else {
+        setFinishSaveStatus("error");
       }
-    }
-  }, [session.step, authUser?.id, session.remoteCaseId, persistBilling]);
+    })();
+  }, [
+    session.step,
+    authUser?.id,
+    persistBilling,
+    rawDispatch,
+    persistenceCtx.notePersistenceUnavailable,
+  ]);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
