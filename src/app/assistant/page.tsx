@@ -1402,6 +1402,7 @@ export default function AssistantPage() {
   const tensionStopFetchGenRef = useRef(0);
   const tensionHypothesisFetchGenRef = useRef(0);
   const closingIntegrationKeyRef = useRef<string | null>(null);
+  const closingIntegrationFetchGenRef = useRef(0);
 
   const runDetection = useCallback(async () => {
     const narrative = session.fullNarrative.trim();
@@ -1649,6 +1650,8 @@ export default function AssistantPage() {
     if (closingIntegrationKeyRef.current === sig) return;
     closingIntegrationKeyRef.current = sig;
 
+    const fetchGen = ++closingIntegrationFetchGenRef.current;
+
     void (async () => {
       try {
         const res = await fetch("/api/assistant", {
@@ -1656,6 +1659,8 @@ export default function AssistantPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt }),
         });
+        if (fetchGen !== closingIntegrationFetchGenRef.current) return;
+
         const data = (await res.json().catch(() => null)) as
           | {
               ok?: boolean;
@@ -1667,6 +1672,8 @@ export default function AssistantPage() {
             }
           | null;
 
+        if (fetchGen !== closingIntegrationFetchGenRef.current) return;
+
         if (data?.ok && data.text) {
           setClosingIntegrationOverloadRetry(false);
           dispatch({
@@ -1676,15 +1683,25 @@ export default function AssistantPage() {
           return;
         }
 
-        setClosingIntegrationOverloadRetry(
-          data?.status === "temporary_ai_overload" && Boolean(data?.retryable)
-        );
+        const isClosingOverload =
+          data?.code === "TEMPORARY_AI_OVERLOAD" ||
+          data?.status === "temporary_ai_overload" ||
+          data?.retryable === true;
+
+        if (isClosingOverload) {
+          setClosingIntegrationOverloadRetry(true);
+          return;
+        }
+
+        setClosingIntegrationOverloadRetry(false);
         dispatch({
           type: "CLOSING_INTEGRATION_ERROR",
           message:
             "Не удалось загрузить данные. Ваши ответы сохранены — попробуйте обновить страницу или повторить позже.",
         });
       } catch {
+        if (fetchGen !== closingIntegrationFetchGenRef.current) return;
+
         setClosingIntegrationOverloadRetry(false);
         dispatch({
           type: "CLOSING_INTEGRATION_ERROR",
@@ -1708,6 +1725,7 @@ export default function AssistantPage() {
     session.therapistOtherMethods,
     session.supervisorStyle,
     session.focusLabel,
+    closingIntegrationOverloadRetry,
     dispatch,
   ]);
 
@@ -2936,15 +2954,46 @@ export default function AssistantPage() {
             </div>
           )}
 
-          {session.step === "closing_step3" && (
-            <div className="space-y-6">
-              <h1 className="text-2xl font-semibold tracking-[-0.03em]">Что сегодня особенно проявилось</h1>
+          {session.step === "closing_step3" &&
+            session.closingIntegrationStatus === "loading" &&
+            closingIntegrationOverloadRetry && (
+              <div className="space-y-4">
+                <h1 className="text-2xl font-semibold tracking-[-0.03em]">Что сегодня особенно проявилось</h1>
+                <p className="text-sm leading-relaxed text-[color:var(--muted)]">
+                  AI сейчас под высокой клинической нагрузкой. Ваш кейс удержан. Повторим через несколько
+                  секунд.
+                </p>
+                <div className="mt-2">
+                  <Button
+                    type="button"
+                    tone="secondary"
+                    className="w-full sm:w-auto"
+                    onClick={() => {
+                      setClosingIntegrationOverloadRetry(false);
+                      closingIntegrationKeyRef.current = null;
+                      dispatch({ type: "CLOSING_INTEGRATION_LOADING" });
+                    }}
+                  >
+                    Повторить
+                  </Button>
+                </div>
+              </div>
+            )}
 
-              {session.closingIntegrationStatus === "loading" && (
+          {session.step === "closing_step3" &&
+            session.closingIntegrationStatus === "loading" &&
+            !closingIntegrationOverloadRetry && (
+              <div className="space-y-6">
+                <h1 className="text-2xl font-semibold tracking-[-0.03em]">Что сегодня особенно проявилось</h1>
                 <p className="text-sm leading-relaxed text-[color:var(--muted)]">
                   Формирую персональную интеграцию по вашему ответу…
                 </p>
-              )}
+              </div>
+            )}
+
+          {session.step === "closing_step3" && session.closingIntegrationStatus !== "loading" && (
+            <div className="space-y-6">
+              <h1 className="text-2xl font-semibold tracking-[-0.03em]">Что сегодня особенно проявилось</h1>
 
               {session.closingIntegrationStatus === "error" && (
                 <div className="rounded-xl border border-[color:color-mix(in srgb, var(--accent-sand) 40%, var(--border))] bg-[color:color-mix(in srgb, var(--accent-sand) 12%, white)] px-4 py-4">
@@ -2972,11 +3021,12 @@ export default function AssistantPage() {
                       tone="secondary"
                       className="w-full sm:w-auto"
                       onClick={() => {
+                        setClosingIntegrationOverloadRetry(false);
                         closingIntegrationKeyRef.current = null;
                         dispatch({ type: "CLOSING_INTEGRATION_LOADING" });
                       }}
                     >
-                      {closingIntegrationOverloadRetry ? "Продолжить супервизию" : "Повторить"}
+                      Повторить
                     </Button>
                   )}
                   <Button
