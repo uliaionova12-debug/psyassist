@@ -2,7 +2,7 @@
 
 import type { AuthChangeEvent } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CasePurchasePaywall } from "@/components/billing/CasePurchasePaywall";
 import { GuestPaywallHint } from "@/components/billing/GuestPaywallHint";
@@ -17,6 +17,7 @@ import type { PlanType, UserBillingProfile } from "@/lib/billing/billing-types";
 import {
   DEFAULT_BILLING_PROFILE,
   canUseChatAnalysis,
+  invalidateLocalBillingStorageBeforeSignedInHydrate,
   loadBillingProfile,
   saveBillingProfile,
 } from "@/lib/billing/entitlements";
@@ -71,8 +72,15 @@ export function ChatAnalysisClient() {
   const caseQuery = searchParams.get("case");
 
   const [billingProfile, setBillingProfile] = useState<UserBillingProfile>(DEFAULT_BILLING_PROFILE);
+  const [billingHydrated, setBillingHydrated] = useState(true);
+  const lastHandledAuthUserIdRef = useRef<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authUser, setAuthUser] = useState<{ id: string } | null>(null);
+
+  const billingForProductGates = useMemo(() => {
+    if (!authUser || billingHydrated) return billingProfile;
+    return DEFAULT_BILLING_PROFILE;
+  }, [authUser, billingHydrated, billingProfile]);
 
   const [casePhase, setCasePhase] = useState<"pick" | "ready">("pick");
   const [caseSummaries, setCaseSummaries] = useState<SupervisionCaseSummary[]>([]);
@@ -97,10 +105,34 @@ export function ChatAnalysisClient() {
   useEffect(() => {
     const client = createSupabaseBrowserClientOptional();
     if (!client) {
+      setBillingHydrated(true);
       setBillingProfile(loadBillingProfile());
       setAuthReady(true);
       return;
     }
+
+    const applyProfileBody = (body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
+      if (body?.ok && body.billing) {
+        saveBillingProfile(body.billing);
+        setBillingProfile(body.billing);
+      } else {
+        setBillingProfile(DEFAULT_BILLING_PROFILE);
+      }
+      if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
+      setBillingHydrated(true);
+    };
+
+    const fetchProfileAndHydrate = () => {
+      void fetch("/api/user/profile", { credentials: "include" })
+        .then((r) => r.json())
+        .then((body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
+          applyProfileBody(body);
+        })
+        .catch(() => {
+          setBillingProfile(DEFAULT_BILLING_PROFILE);
+          setBillingHydrated(true);
+        });
+    };
 
     let sub: { unsubscribe: () => void } | undefined;
 
@@ -108,21 +140,18 @@ export function ChatAnalysisClient() {
       const u = session?.user;
       setAuthUser(u ? { id: u.id } : null);
       if (u) {
-        void fetch("/api/user/profile", { credentials: "include" })
-          .then((r) => r.json())
-          .then((body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
-            if (body?.ok && body.billing) {
-              saveBillingProfile(body.billing);
-              setBillingProfile(body.billing);
-            } else {
-              setBillingProfile(DEFAULT_BILLING_PROFILE);
-            }
-            if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
-          })
-          .catch(() => {
-            setBillingProfile(DEFAULT_BILLING_PROFILE);
-          });
+        invalidateLocalBillingStorageBeforeSignedInHydrate();
+        const prev = lastHandledAuthUserIdRef.current;
+        const isNewIdentity = prev !== u.id;
+        lastHandledAuthUserIdRef.current = u.id;
+        if (isNewIdentity) {
+          setBillingHydrated(false);
+          setBillingProfile(DEFAULT_BILLING_PROFILE);
+        }
+        fetchProfileAndHydrate();
       } else {
+        lastHandledAuthUserIdRef.current = null;
+        setBillingHydrated(true);
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
       }
@@ -133,21 +162,18 @@ export function ChatAnalysisClient() {
       const u = session?.user;
       setAuthUser(u ? { id: u.id } : null);
       if (u) {
-        void fetch("/api/user/profile", { credentials: "include" })
-          .then((r) => r.json())
-          .then((body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
-            if (body?.ok && body.billing) {
-              saveBillingProfile(body.billing);
-              setBillingProfile(body.billing);
-            } else {
-              setBillingProfile(DEFAULT_BILLING_PROFILE);
-            }
-            if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
-          })
-          .catch(() => {
-            setBillingProfile(DEFAULT_BILLING_PROFILE);
-          });
+        invalidateLocalBillingStorageBeforeSignedInHydrate();
+        const prev = lastHandledAuthUserIdRef.current;
+        const isNewIdentity = prev !== u.id;
+        lastHandledAuthUserIdRef.current = u.id;
+        if (isNewIdentity) {
+          setBillingHydrated(false);
+          setBillingProfile(DEFAULT_BILLING_PROFILE);
+        }
+        fetchProfileAndHydrate();
       } else if (event === "SIGNED_OUT") {
+        lastHandledAuthUserIdRef.current = null;
+        setBillingHydrated(true);
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
       }
@@ -351,13 +377,13 @@ export function ChatAnalysisClient() {
       return;
     }
 
-    const allowed = canUseChatAnalysis(billingProfile);
+    const allowed = canUseChatAnalysis(billingForProductGates);
 
     if (isQaMode()) {
       // QA: allow all modules; do not show paywalls/teasers.
       // Entitlements/credits are already bypassed centrally.
     } else {
-    if (!allowed && billingProfile.planType === "free") {
+    if (!allowed && billingForProductGates.planType === "free") {
       setShowFreeTeaser(true);
       void trackEvent({
         eventName: PRODUCT_EVENTS.paywall_seen,
@@ -366,7 +392,10 @@ export function ChatAnalysisClient() {
       return;
     }
 
-    if (!allowed && (billingProfile.planType === "start" || billingProfile.planType === "single_case")) {
+    if (
+      !allowed &&
+      (billingForProductGates.planType === "start" || billingForProductGates.planType === "single_case")
+    ) {
       setShowPaywallGate(true);
       void trackEvent({
         eventName: PRODUCT_EVENTS.paywall_seen,
@@ -440,7 +469,7 @@ export function ChatAnalysisClient() {
     setShowPaywallGate(false);
   }
 
-  const practiceFull = canUseChatAnalysis(billingProfile);
+  const practiceFull = canUseChatAnalysis(billingForProductGates);
 
   const pickCaseBlock =
     casePhase === "pick" ? (

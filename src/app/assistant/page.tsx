@@ -113,6 +113,7 @@ import {
   canStartCase,
   canUseChatAnalysis,
   canUseNav,
+  invalidateLocalBillingStorageBeforeSignedInHydrate,
   loadBillingProfile,
   saveBillingProfile,
 } from "@/lib/billing/entitlements";
@@ -320,8 +321,19 @@ export default function AssistantPage() {
   const [chatAnalysisImages, setChatAnalysisImages] = useState<Array<{ mimeType: string; base64: string }>>([]);
 
   const [billingProfile, setBillingProfile] = useState<UserBillingProfile>(DEFAULT_BILLING_PROFILE);
+  /** For logged-in users, gates stay on DEFAULT until `/api/user/profile` succeeds once (server replaces stale localStorage). */
+  const [billingHydrated, setBillingHydrated] = useState(true);
+  const lastHandledAuthUserIdRef = useRef<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authUser, setAuthUser] = useState<{ id: string } | null>(null);
+
+  const billingForProductGates = useMemo(() => {
+    if (!authUser || billingHydrated) return billingProfile;
+    return DEFAULT_BILLING_PROFILE;
+  }, [authUser, billingHydrated, billingProfile]);
+
+  const billingGatesRef = useRef(billingForProductGates);
+  billingGatesRef.current = billingForProductGates;
 
   const loggedInPersistenceRef = useRef(false);
   loggedInPersistenceRef.current = Boolean(authUser);
@@ -331,10 +343,35 @@ export default function AssistantPage() {
   useEffect(() => {
     const client = createSupabaseBrowserClientOptional();
     if (!client) {
+      setBillingHydrated(true);
       setBillingProfile(loadBillingProfile());
       setAuthReady(true);
       return;
     }
+
+    const applyProfileBody = (body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
+      if (body?.ok && body.billing) {
+        saveBillingProfile(body.billing);
+        setBillingProfile(body.billing);
+      } else {
+        setBillingProfile(DEFAULT_BILLING_PROFILE);
+      }
+      if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
+      setBillingHydrated(true);
+    };
+
+    const fetchProfileAndHydrate = () => {
+      setBillingHydrated(false);
+      void fetch("/api/user/profile", { credentials: "include" })
+        .then((r) => r.json())
+        .then((body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
+          applyProfileBody(body);
+        })
+        .catch(() => {
+          setBillingProfile(DEFAULT_BILLING_PROFILE);
+          setBillingHydrated(true);
+        });
+    };
 
     let subscription: { unsubscribe: () => void } | undefined;
 
@@ -342,21 +379,18 @@ export default function AssistantPage() {
       const u = session?.user;
       setAuthUser(u ? { id: u.id } : null);
       if (u) {
-        void fetch("/api/user/profile", { credentials: "include" })
-          .then((r) => r.json())
-          .then((body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
-            if (body?.ok && body.billing) {
-              saveBillingProfile(body.billing);
-              setBillingProfile(body.billing);
-            } else {
-              setBillingProfile(DEFAULT_BILLING_PROFILE);
-            }
-            if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
-          })
-          .catch(() => {
-            setBillingProfile(DEFAULT_BILLING_PROFILE);
-          });
+        invalidateLocalBillingStorageBeforeSignedInHydrate();
+        const prev = lastHandledAuthUserIdRef.current;
+        const isNewIdentity = prev !== u.id;
+        lastHandledAuthUserIdRef.current = u.id;
+        if (isNewIdentity) {
+          setBillingHydrated(false);
+          setBillingProfile(DEFAULT_BILLING_PROFILE);
+        }
+        fetchProfileAndHydrate();
       } else {
+        lastHandledAuthUserIdRef.current = null;
+        setBillingHydrated(true);
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
       }
@@ -367,21 +401,18 @@ export default function AssistantPage() {
       const u = session?.user;
       setAuthUser(u ? { id: u.id } : null);
       if (u) {
-        void fetch("/api/user/profile", { credentials: "include" })
-          .then((r) => r.json())
-          .then((body: { ok?: boolean; billing?: UserBillingProfile; qaMode?: boolean }) => {
-            if (body?.ok && body.billing) {
-              saveBillingProfile(body.billing);
-              setBillingProfile(body.billing);
-            } else {
-              setBillingProfile(DEFAULT_BILLING_PROFILE);
-            }
-            if (body?.ok) setQaModeServerFlag(Boolean(body.qaMode));
-          })
-          .catch(() => {
-            setBillingProfile(DEFAULT_BILLING_PROFILE);
-          });
+        invalidateLocalBillingStorageBeforeSignedInHydrate();
+        const prev = lastHandledAuthUserIdRef.current;
+        const isNewIdentity = prev !== u.id;
+        lastHandledAuthUserIdRef.current = u.id;
+        if (isNewIdentity) {
+          setBillingHydrated(false);
+          setBillingProfile(DEFAULT_BILLING_PROFILE);
+        }
+        fetchProfileAndHydrate();
       } else if (event === "SIGNED_OUT") {
+        lastHandledAuthUserIdRef.current = null;
+        setBillingHydrated(true);
         setBillingProfile(loadBillingProfile());
         setQaModeServerFlag(false);
       }
@@ -414,11 +445,11 @@ export default function AssistantPage() {
   }, []);
 
   const depthOrderForBilling = useMemo(() => {
-    if (billingProfile.planType === "free" && !billingProfile.freeIntroUsed) {
+    if (billingForProductGates.planType === "free" && !billingForProductGates.freeIntroUsed) {
       return SESSION_DEPTH_ORDER.filter((d) => d === SESSION_DEPTH_CALLBACK.THREE);
     }
     return SESSION_DEPTH_ORDER;
-  }, [billingProfile.planType, billingProfile.freeIntroUsed]);
+  }, [billingForProductGates.planType, billingForProductGates.freeIntroUsed]);
 
   const handleCheckoutPlan = useCallback(async (plan: Exclude<PlanType, "free">) => {
     setBillingSoftNotice(null);
@@ -696,7 +727,7 @@ export default function AssistantPage() {
       }
 
       if (action.type === "OPEN_CHAT_ANALYSIS") {
-        if (!canUseChatAnalysis(billingProfileRef.current) && !isQaMode()) {
+        if (!canUseChatAnalysis(billingGatesRef.current) && !isQaMode()) {
           void trackEvent({
             eventName: PRODUCT_EVENTS.paywall_seen,
             payload: { placement: "chat_blocked" },
@@ -706,7 +737,7 @@ export default function AssistantPage() {
       }
 
       if (action.type === "NAV_BEGIN_LEVEL") {
-        if (!canUseNav(billingProfileRef.current) && !isQaMode()) {
+        if (!canUseNav(billingGatesRef.current) && !isQaMode()) {
           void trackEvent({
             eventName: PRODUCT_EVENTS.paywall_seen,
             payload: { placement: "nav_blocked" },
@@ -716,7 +747,7 @@ export default function AssistantPage() {
       }
 
       if (action.type === "POST_REFLECTION_ACTION" && action.id !== "finish_after_reflection") {
-        const bp = billingProfileRef.current;
+        const bp = billingGatesRef.current;
         if (bp.planType === "free" && bp.freeIntroUsed && !isQaMode()) {
           void trackEvent({
             eventName: PRODUCT_EVENTS.paywall_seen,
@@ -785,7 +816,7 @@ export default function AssistantPage() {
       }
 
       if (action.type === "RESET") {
-        if (!canStartCase(billingProfileRef.current) && !isQaMode()) {
+        if (!canStartCase(billingGatesRef.current) && !isQaMode()) {
           void trackEvent({
             eventName: PRODUCT_EVENTS.paywall_seen,
             payload: { placement: "new_case_blocked" },
@@ -860,8 +891,8 @@ export default function AssistantPage() {
   useEffect(() => {
     if (session.step !== "post_reflection" || session.reflectionStatus !== "success") return;
     if (
-      billingProfile.planType !== "free" ||
-      !billingProfile.freeIntroUsed ||
+      billingForProductGates.planType !== "free" ||
+      !billingForProductGates.freeIntroUsed ||
       paywallSeenIntroRef.current
     ) {
       return;
@@ -871,7 +902,12 @@ export default function AssistantPage() {
       eventName: PRODUCT_EVENTS.paywall_seen,
       payload: { placement: "post_intro" },
     });
-  }, [session.step, session.reflectionStatus, billingProfile.planType, billingProfile.freeIntroUsed]);
+  }, [
+    session.step,
+    session.reflectionStatus,
+    billingForProductGates.planType,
+    billingForProductGates.freeIntroUsed,
+  ]);
 
   useEffect(() => {
     void trackEvent({ eventName: PRODUCT_EVENTS.session_start });
@@ -1630,6 +1666,7 @@ export default function AssistantPage() {
   ]);
 
   useEffect(() => {
+    if (authUser && !billingHydrated) return;
     if (session.step !== "integration_reflection" || session.reflectionStatus !== "loading") {
       return;
     }
@@ -1649,9 +1686,12 @@ export default function AssistantPage() {
     session.fullNarrative.length,
     session.supervisionRequest.length,
     session.remoteCaseId,
+    authUser,
+    billingHydrated,
   ]);
 
   useEffect(() => {
+    if (authUser && !billingHydrated) return;
     if (
       session.step !== "post_reflection" ||
       session.reflectionStatus !== "success" ||
@@ -1671,6 +1711,8 @@ export default function AssistantPage() {
     session.reflectionStatus,
     session.reflectionText,
     session.remoteCaseId,
+    authUser,
+    billingHydrated,
   ]);
 
   useEffect(() => {
@@ -1969,21 +2011,21 @@ export default function AssistantPage() {
     "finished",
   ]);
   const showIntroBanner =
-    billingProfile.planType === "free" &&
-    !billingProfile.freeIntroUsed &&
+    billingForProductGates.planType === "free" &&
+    !billingForProductGates.freeIntroUsed &&
     !hideIntroBannerSteps.has(session.step);
 
   const showPremiumPostIntroPaywall =
     session.step === "post_reflection" &&
     session.reflectionStatus === "success" &&
     Boolean(session.reflectionText.trim()) &&
-    billingProfile.planType === "free" &&
-    billingProfile.freeIntroUsed;
+    billingForProductGates.planType === "free" &&
+    billingForProductGates.freeIntroUsed;
 
   const gateFreeRetention =
-    billingProfile.planType === "free" && billingProfile.freeIntroUsed;
+    billingForProductGates.planType === "free" && billingForProductGates.freeIntroUsed;
 
-  const caseStartBlocked = !canStartCase(billingProfile);
+  const caseStartBlocked = !canStartCase(billingForProductGates);
 
   const showFinishedPaywall =
     caseStartBlocked &&
@@ -1993,7 +2035,7 @@ export default function AssistantPage() {
       finishSaveStatus === "skipped");
 
   const showPersistenceAuthBanner =
-    billingProfile.planType === "free" &&
+    billingForProductGates.planType === "free" &&
     Boolean(persistenceBanner) &&
     !clinicalSessionBlocksAuth(session.step);
 
@@ -2992,7 +3034,7 @@ export default function AssistantPage() {
                   </div>
                 </div>
               )}
-              {canUseChatAnalysis(billingProfile) && (
+              {canUseChatAnalysis(billingForProductGates) && (
                 <div className="space-y-3 border-t border-[color:var(--border)] pt-6">
                   <p className="text-sm font-medium text-[color:var(--text)]">
                     Анализ переписки или скриншотов
@@ -3011,7 +3053,7 @@ export default function AssistantPage() {
                   </Button>
                 </div>
               )}
-              {canUseNav(billingProfile) && (
+              {canUseNav(billingForProductGates) && (
                 <div className="space-y-3 border-t border-[color:var(--border)] pt-6">
                   <p className="text-sm font-medium text-[color:var(--text)]">
                     Многослойная навигация по разбору
