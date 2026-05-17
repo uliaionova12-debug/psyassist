@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { append_case_context } from "@/lib/persistence/cases";
-import { createSupabaseServerClientOptional } from "@/lib/supabase/server-optional";
+import { createSupabasePersistenceClient } from "@/lib/supabase/server-persistence";
 
 const BodySchema = z.object({
   addition: z.string().min(1),
@@ -11,7 +11,7 @@ const BodySchema = z.object({
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function POST(req: Request, ctx: RouteParams) {
-  const supabase = await createSupabaseServerClientOptional();
+  const supabase = await createSupabasePersistenceClient();
   if (!supabase) {
     return NextResponse.json({ ok: false as const, code: "SUPABASE_DISABLED" });
   }
@@ -37,7 +37,7 @@ export async function POST(req: Request, ctx: RouteParams) {
   }
 
   try {
-    await append_case_context(supabase, caseId, parsed.data.addition);
+    await append_case_context(supabase, caseId, user.id, parsed.data.addition);
     return NextResponse.json({ ok: true as const });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

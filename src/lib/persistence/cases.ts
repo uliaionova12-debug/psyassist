@@ -10,38 +10,61 @@ export type SaveCaseInput = {
   initialCase: string;
 };
 
+export type SaveCaseInsertPayload = {
+  user_id: string;
+  user_name: string | null;
+  case_title: string;
+  client_name: string;
+  first_session_date: string;
+  initial_case: string;
+  case_context: string;
+  status: "active";
+  clinical_memory: Record<string, never>;
+};
+
+export function build_save_case_payload(userId: string, input: SaveCaseInput): SaveCaseInsertPayload {
+  return {
+    user_id: userId,
+    user_name: input.userName,
+    case_title: input.caseTitle,
+    client_name: input.clientName,
+    first_session_date: input.firstSessionDate,
+    initial_case: input.initialCase,
+    case_context: "",
+    status: "active",
+    clinical_memory: {},
+  };
+}
+
 export async function save_case(
   supabase: SupabaseClient,
   userId: string,
   input: SaveCaseInput
 ): Promise<number> {
-  const now = new Date().toISOString();
+  const payload = build_save_case_payload(userId, input);
 
-  const { data, error } = await supabase
-    .from("cases")
-    .insert({
-      user_id: userId,
-      user_name: input.userName,
-      case_title: input.caseTitle,
-      client_name: input.clientName,
-      first_session_date: input.firstSessionDate,
-      initial_case: input.initialCase,
-      case_context: "",
-      created_at: now,
-      updated_at: now,
-      status: "active",
-    })
-    .select("id")
-    .single();
+  const { data, error } = await supabase.from("cases").insert(payload).select("id").single();
 
-  if (error) throw error;
-  if (!data?.id) throw new Error("save_case: missing id");
+  if (error) {
+    console.info("[persist/create] insert result/error", { code: error.code, message: error.message });
+    throw error;
+  }
+  if (!data?.id) {
+    console.info("[persist/create] insert result/error", {
+      code: "MISSING_ID",
+      message: "save_case: insert returned no id (check RLS SELECT after INSERT)",
+    });
+    throw new Error("save_case: missing id");
+  }
+
+  console.info("[persist/create] insert result/error", { ok: true, id: data.id });
   return Number(data.id);
 }
 
 export async function append_case_context(
   supabase: SupabaseClient,
   caseId: number,
+  userId: string,
   addition: string
 ): Promise<void> {
   const now = new Date().toISOString();
@@ -50,6 +73,7 @@ export async function append_case_context(
     .from("cases")
     .select("case_context")
     .eq("id", caseId)
+    .eq("user_id", userId)
     .single();
 
   if (selErr) throw selErr;
@@ -60,7 +84,8 @@ export async function append_case_context(
   const { error: updErr } = await supabase
     .from("cases")
     .update({ case_context: next, updated_at: now })
-    .eq("id", caseId);
+    .eq("id", caseId)
+    .eq("user_id", userId);
 
   if (updErr) throw updErr;
 }
@@ -68,13 +93,15 @@ export async function append_case_context(
 export async function update_case_initial(
   supabase: SupabaseClient,
   caseId: number,
+  userId: string,
   initialCase: string
 ): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await supabase
     .from("cases")
     .update({ initial_case: initialCase, updated_at: now })
-    .eq("id", caseId);
+    .eq("id", caseId)
+    .eq("user_id", userId);
 
   if (error) throw error;
 }
@@ -116,7 +143,7 @@ export async function complete_case_session(
   patch: CaseStructuredPatch
 ): Promise<void> {
   const now = new Date().toISOString();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("cases")
     .update({
       focus: patch.focus,
@@ -133,9 +160,21 @@ export async function complete_case_session(
         : {}),
     })
     .eq("id", caseId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .select("id")
+    .maybeSingle();
 
-  if (error) throw error;
+  if (error) {
+    console.info("[persist/complete] update result/error", { code: error.code, message: error.message });
+    throw error;
+  }
+  if (!data?.id) {
+    const msg = "complete_case_session: no row updated (case missing or RLS denied)";
+    console.info("[persist/complete] update result/error", { code: "NO_ROW", message: msg });
+    throw new Error(msg);
+  }
+
+  console.info("[persist/complete] update result/error", { ok: true, id: data.id });
 }
 
 export type CaseProgressPatch = {

@@ -17,9 +17,10 @@
 
 ## SQL migration
 
-Примените файл:
+Примените миграции (по порядку):
 
-`supabase/migrations/20260209120000_psyassist_persistence.sql`
+1. `supabase/migrations/20260209120000_psyassist_persistence.sql`
+2. `supabase/migrations/20260514120000_case_structured_memory.sql` (или объединённая `20260517120000_cases_rls_and_structured_memory.sql`)
 
 Способ:
 

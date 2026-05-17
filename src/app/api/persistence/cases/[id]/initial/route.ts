@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { update_case_initial } from "@/lib/persistence/cases";
-import { createSupabaseServerClientOptional } from "@/lib/supabase/server-optional";
+import { createSupabasePersistenceClient } from "@/lib/supabase/server-persistence";
 
 const BodySchema = z.object({
   initialCase: z.string(),
@@ -11,7 +11,7 @@ const BodySchema = z.object({
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: Request, ctx: RouteParams) {
-  const supabase = await createSupabaseServerClientOptional();
+  const supabase = await createSupabasePersistenceClient();
   if (!supabase) {
     return NextResponse.json({ ok: false as const, code: "SUPABASE_DISABLED" });
   }
@@ -37,7 +37,7 @@ export async function PATCH(req: Request, ctx: RouteParams) {
   }
 
   try {
-    await update_case_initial(supabase, caseId, parsed.data.initialCase);
+    await update_case_initial(supabase, caseId, user.id, parsed.data.initialCase);
     return NextResponse.json({ ok: true as const });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

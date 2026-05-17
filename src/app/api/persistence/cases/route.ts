@@ -1,14 +1,16 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { get_user_cases, save_case } from "@/lib/persistence/cases";
+import {
+  build_save_case_payload,
+  get_user_cases,
+  save_case,
+} from "@/lib/persistence/cases";
 import { caseSummaryRowToSupervisionSummary } from "@/lib/persistence/supervision-case";
-import { supabaseAuthCookieNames } from "@/lib/supabase/cookie-methods";
-import { createSupabaseServerClientOptional } from "@/lib/supabase/server-optional";
+import { createSupabasePersistenceClient } from "@/lib/supabase/server-persistence";
 
 export async function GET() {
-  const supabase = await createSupabaseServerClientOptional();
+  const supabase = await createSupabasePersistenceClient();
   if (!supabase) {
     return NextResponse.json({ ok: false as const, code: "SUPABASE_DISABLED" });
   }
@@ -46,16 +48,8 @@ const SaveBodySchema = z.object({
 });
 
 export async function POST(req: Request) {
-  console.info("[cases/save] reached");
-
-  const cookieStore = await cookies();
-  const allNames = cookieStore.getAll().map((c) => c.name);
-  const authNames = supabaseAuthCookieNames(cookieStore);
-  if (authNames.length === 0) {
-    console.info("[cases/save] cookie names present, no values", allNames.join(", ") || "(none)");
-  }
-
-  const supabase = await createSupabaseServerClientOptional();
+  const response = NextResponse.json({ ok: true as const, caseId: 0 });
+  const supabase = await createSupabasePersistenceClient(response.cookies);
   if (!supabase) {
     return NextResponse.json({ ok: false as const, code: "SUPABASE_DISABLED" });
   }
@@ -65,7 +59,7 @@ export async function POST(req: Request) {
     error: authErr,
   } = await supabase.auth.getUser();
 
-  console.info("[cases/save] user id or NO_SESSION", user?.id ?? "NO_SESSION");
+  console.info("[persist/create] user.id", user?.id ?? "NO_SESSION");
 
   if (authErr || !user) {
     return NextResponse.json({ ok: false as const, code: "NO_SESSION" });
@@ -76,23 +70,24 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false as const, code: "INVALID_BODY" }, { status: 400 });
   }
 
-  try {
-    const caseId = await save_case(supabase, user.id, {
-      userName: parsed.data.userName ?? null,
-      caseTitle: parsed.data.caseTitle,
-      clientName: parsed.data.clientName,
-      firstSessionDate: parsed.data.firstSessionDate,
-      initialCase: parsed.data.initialCase,
-    });
+  const input = {
+    userName: parsed.data.userName ?? null,
+    caseTitle: parsed.data.caseTitle,
+    clientName: parsed.data.clientName,
+    firstSessionDate: parsed.data.firstSessionDate,
+    initialCase: parsed.data.initialCase,
+  };
+  console.info("[persist/create] payload", build_save_case_payload(user.id, input));
 
-    return NextResponse.json({ ok: true as const, caseId });
+  try {
+    const caseId = await save_case(supabase, user.id, input);
+    return NextResponse.json({ ok: true as const, caseId }, { headers: response.headers });
   } catch (e) {
     const err = e as { code?: string; message?: string };
     const msg = err.message ?? (e instanceof Error ? e.message : String(e));
-    console.info("[cases/save] insert error code/message", err.code ?? "unknown", msg);
     return NextResponse.json(
       { ok: false as const, code: "SAVE_FAILED", message: msg },
-      { status: 500 }
+      { status: 500, headers: response.headers }
     );
   }
 }

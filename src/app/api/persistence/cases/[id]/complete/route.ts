@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { complete_case_session } from "@/lib/persistence/cases";
-import { createSupabaseServerClientOptional } from "@/lib/supabase/server-optional";
+import { createSupabasePersistenceClient } from "@/lib/supabase/server-persistence";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -23,9 +23,8 @@ const BodySchema = z.object({
 });
 
 export async function POST(req: Request, ctx: RouteParams) {
-  console.info("[cases/save] reached");
-
-  const supabase = await createSupabaseServerClientOptional();
+  const response = NextResponse.json({ ok: true as const });
+  const supabase = await createSupabasePersistenceClient(response.cookies);
   if (!supabase) {
     return NextResponse.json({ ok: false as const, code: "SUPABASE_DISABLED" });
   }
@@ -35,7 +34,7 @@ export async function POST(req: Request, ctx: RouteParams) {
     error: authErr,
   } = await supabase.auth.getUser();
 
-  console.info("[cases/save] user id or NO_SESSION", user?.id ?? "NO_SESSION");
+  console.info("[persist/complete] user.id", user?.id ?? "NO_SESSION");
 
   if (authErr || !user) {
     return NextResponse.json({ ok: false as const, code: "NO_SESSION" });
@@ -63,12 +62,13 @@ export async function POST(req: Request, ctx: RouteParams) {
       session_snapshot: parsed.data.snapshot,
       case_title: parsed.data.case_title,
     });
-    return NextResponse.json({ ok: true as const });
+    return NextResponse.json({ ok: true as const }, { headers: response.headers });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const err = e as { code?: string; message?: string };
+    const msg = err.message ?? (e instanceof Error ? e.message : String(e));
     return NextResponse.json(
       { ok: false as const, code: "COMPLETE_FAILED", message: msg },
-      { status: 500 }
+      { status: 500, headers: response.headers }
     );
   }
 }
