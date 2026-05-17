@@ -6,22 +6,87 @@ import type {
   SupervisionCaseSummary,
 } from "@/lib/persistence/types";
 
-export function caseSummaryRowToSupervisionSummary(row: CaseSummaryRow): SupervisionCaseSummary {
+const CASE_TITLE_OBJECT_KEYS = [
+  "title",
+  "label",
+  "name",
+  "text",
+  "value",
+  "case_title",
+  "caseTitle",
+  "client_alias",
+  "client_name",
+  "clientName",
+] as const;
+
+/** Coerce API/DB values to a display-safe string (avoids `[object Object]` in UI). */
+export function persistenceDisplayString(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const t = value.trim();
+    return t.length ? t : null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    const t = String(value).trim();
+    return t.length ? t : null;
+  }
+  if (typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    for (const key of CASE_TITLE_OBJECT_KEYS) {
+      const inner = persistenceDisplayString(o[key]);
+      if (inner) return inner;
+    }
+  }
+  return null;
+}
+
+export function supervisionCaseDisplayTitle(
+  c: Pick<SupervisionCaseSummary, "id" | "case_title" | "client_name">
+): string {
+  return (
+    persistenceDisplayString(c.case_title) ||
+    persistenceDisplayString(c.client_name) ||
+    `Кейс #${persistenceDisplayString(c.id) ?? String(c.id)}`
+  );
+}
+
+function normalizeSummaryFields(
+  row: CaseSummaryRow | Record<string, unknown>
+): SupervisionCaseSummary {
+  const r = row as Record<string, unknown>;
+  const idRaw = r.id ?? r.caseId ?? r.case_id;
+  const id = persistenceDisplayString(idRaw) ?? (idRaw != null ? String(idRaw) : "");
   return {
-    id: String(row.id),
-    case_title: row.case_title,
-    client_name: row.client_name,
-    first_session_date: row.first_session_date,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    status: row.status,
-    focus: row.focus,
-    current_step: row.current_step,
-    current_layer: row.current_layer,
-    duration_minutes: row.duration_minutes,
-    last_insight: row.last_insight,
-    resume_available: Boolean(row.resume_available),
+    id,
+    case_title: persistenceDisplayString(r.case_title ?? r.caseTitle ?? r.title),
+    client_name: persistenceDisplayString(r.client_name ?? r.clientName),
+    first_session_date: persistenceDisplayString(r.first_session_date ?? r.firstSessionDate),
+    created_at: persistenceDisplayString(r.created_at ?? r.createdAt) ?? "",
+    updated_at: persistenceDisplayString(r.updated_at ?? r.updatedAt) ?? "",
+    status: persistenceDisplayString(r.status),
+    focus: persistenceDisplayString(r.focus),
+    current_step: persistenceDisplayString(r.current_step ?? r.currentStep),
+    current_layer: persistenceDisplayString(r.current_layer ?? r.currentLayer),
+    duration_minutes:
+      typeof r.duration_minutes === "number"
+        ? r.duration_minutes
+        : typeof r.durationMinutes === "number"
+          ? r.durationMinutes
+          : null,
+    last_insight: persistenceDisplayString(r.last_insight ?? r.lastInsight),
+    resume_available: Boolean(r.resume_available ?? r.resumeAvailable),
   };
+}
+
+export function normalizeSupervisionCaseSummary(raw: unknown): SupervisionCaseSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const summary = normalizeSummaryFields(raw as Record<string, unknown>);
+  if (!summary.id) return null;
+  return summary;
+}
+
+export function caseSummaryRowToSupervisionSummary(row: CaseSummaryRow): SupervisionCaseSummary {
+  return normalizeSummaryFields(row);
 }
 
 function lastBlockAfterPrefix(blob: string, prefix: string): string | null {
@@ -123,21 +188,10 @@ export function parseCaseContextBlob(caseContext: string | null): SupervisionCas
 
 export function caseRowToSupervisionCase(row: CaseRow): SupervisionCase {
   const parsed = parseCaseContextBlob(row.case_context);
-  const summary: SupervisionCaseSummary = {
-    id: String(row.id),
-    case_title: row.case_title,
-    client_name: row.client_name,
-    first_session_date: row.first_session_date,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    status: row.status,
-    focus: row.focus,
-    current_step: row.current_step,
-    current_layer: row.current_layer,
-    duration_minutes: row.duration_minutes,
-    last_insight: row.last_insight,
+  const summary = normalizeSummaryFields({
+    ...row,
     resume_available: Boolean(row.session_snapshot),
-  };
+  });
   return {
     ...summary,
     ...parsed,

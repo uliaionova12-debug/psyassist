@@ -98,6 +98,7 @@ import {
   syncAssistantCaseInitialState,
 } from "@/lib/persistence/assistant-reducer";
 import { deriveCaseCardMeta } from "@/lib/persistence/case-card-meta";
+import { persistenceDisplayString } from "@/lib/persistence/supervision-case";
 import {
   clearAssistantSessionSnapshot,
   readAssistantSessionSnapshotForInit,
@@ -708,8 +709,8 @@ export default function AssistantPage() {
 
         let caseId = sessionRef.current.remoteCaseId;
         if (caseId == null) {
-          const alias = snapshotSession!.intake.client_alias?.trim();
-          const dur = snapshotSession!.intake.therapy_duration?.trim();
+          const alias = persistenceDisplayString(snapshotSession!.intake.client_alias);
+          const dur = persistenceDisplayString(snapshotSession!.intake.therapy_duration);
           const narrative = snapshotSession!.fullNarrative.trim();
           if (!narrative || !alias || !dur) {
             setFinishSaveStatus("skipped");
@@ -735,6 +736,7 @@ export default function AssistantPage() {
           );
         }
 
+        const caseTitle = persistenceDisplayString(snapshotSession!.intake.client_alias);
         const r = await persistence_complete_case_session(caseId, {
           snapshot: {
             v: 1,
@@ -748,7 +750,7 @@ export default function AssistantPage() {
           current_question: meta.current_question,
           duration_minutes: meta.duration_minutes,
           last_insight: meta.last_insight,
-          case_title: snapshotSession!.intake.client_alias?.trim() ?? null,
+          case_title: caseTitle,
         });
         if (r.ok) {
           persistFinishOnceRef.current = onceKey;
@@ -763,6 +765,8 @@ export default function AssistantPage() {
         } else {
           setFinishSaveStatus("error");
         }
+      } catch {
+        setFinishSaveStatus("error");
       } finally {
         finishSaveInFlightRef.current = false;
       }

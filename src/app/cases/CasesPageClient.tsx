@@ -14,6 +14,10 @@ import {
   persistence_list_cases,
   persistence_patch_case_status,
 } from "@/lib/persistence/assistant-client";
+import {
+  persistenceDisplayString,
+  supervisionCaseDisplayTitle,
+} from "@/lib/persistence/supervision-case";
 import type { SupervisionCase, SupervisionCaseSummary } from "@/lib/persistence/types";
 
 function formatRuDate(iso: string): string {
@@ -177,7 +181,7 @@ export function CasesPageClient({ serverHasSession }: Props) {
                   <div className="flex flex-col gap-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-lg font-semibold tracking-[-0.02em]">
-                        {c.case_title?.trim() || c.client_name?.trim() || `Кейс #${c.id}`}
+                        {supervisionCaseDisplayTitle(c)}
                       </span>
                       <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-xs text-[color:var(--muted)]">
                         {statusRu(c.status)}
@@ -189,16 +193,16 @@ export function CasesPageClient({ serverHasSession }: Props) {
                     </p>
                   </div>
                   <dl className="grid grid-cols-1 gap-2 text-sm text-[color:var(--muted)]">
-                    {c.focus?.trim() ? (
+                    {persistenceDisplayString(c.focus) ? (
                       <div>
                         <dt className="font-medium text-[color:var(--text)]">Фокус</dt>
-                        <dd className="mt-0.5 leading-relaxed">{c.focus}</dd>
+                        <dd className="mt-0.5 leading-relaxed">{persistenceDisplayString(c.focus)}</dd>
                       </div>
                     ) : null}
-                    {c.current_layer?.trim() ? (
+                    {persistenceDisplayString(c.current_layer) ? (
                       <div>
                         <dt className="font-medium text-[color:var(--text)]">Слой</dt>
-                        <dd className="mt-0.5 leading-relaxed">{c.current_layer}</dd>
+                        <dd className="mt-0.5 leading-relaxed">{persistenceDisplayString(c.current_layer)}</dd>
                       </div>
                     ) : null}
                     {c.duration_minutes != null ? (
@@ -292,7 +296,7 @@ export function CasesPageClient({ serverHasSession }: Props) {
           <Card className="mt-8 space-y-4 p-5 sm:p-6">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <h2 className="text-lg font-semibold tracking-[-0.02em]">
-                {detail.case_title?.trim() || detail.client_name?.trim() || `Кейс #${detail.id}`}
+                {supervisionCaseDisplayTitle(detail)}
               </h2>
               <Button type="button" tone="ghost" className="self-start sm:self-auto" onClick={() => setDetail(null)}>
                 Закрыть
