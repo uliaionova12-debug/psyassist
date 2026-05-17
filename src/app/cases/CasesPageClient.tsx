@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
@@ -7,13 +8,13 @@ import { ButtonLink } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/ui/Container";
 import { stripClinicalMarkdown } from "@/lib/clinical/markdown-strip";
-import { syncBrowserSessionToServer } from "@/lib/auth/sync-browser-session";
 import {
   persistence_ensure_server_auth,
   persistence_get_supervision_case,
   persistence_list_cases,
   persistence_patch_case_status,
 } from "@/lib/persistence/assistant-client";
+import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
 import {
   persistenceDisplayString,
   supervisionCaseDisplayTitle,
@@ -41,6 +42,9 @@ type Props = {
 };
 
 export function CasesPageClient({ serverHasSession }: Props) {
+  const router = useRouter();
+  const [authReady, setAuthReady] = useState(false);
+  const [browserHasUser, setBrowserHasUser] = useState(false);
   const [cases, setCases] = useState<SupervisionCaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,21 +53,57 @@ export function CasesPageClient({ serverHasSession }: Props) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  useEffect(() => {
+    const client = createSupabaseBrowserClientOptional();
+    if (!client) {
+      setAuthReady(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    void client.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled) return;
+      setBrowserHasUser(Boolean(session?.user));
+      setAuthReady(true);
+    });
+
+    const { data: sub } = client.auth.onAuthStateChange((_event, session) => {
+      if (cancelled) return;
+      setBrowserHasUser(Boolean(session?.user));
+      setAuthReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
   const load = useCallback(async () => {
+    if (!authReady) return;
+
     setLoading(true);
     setError(null);
 
-    if (!serverHasSession) {
-      const synced = await syncBrowserSessionToServer();
-      if (!synced.ok) {
-        const ensured = await persistence_ensure_server_auth();
-        if (!ensured) {
-          setError("Войдите в аккаунт, чтобы увидеть сохранённые кейсы.");
-          setCases([]);
-          setLoading(false);
-          return;
-        }
+    if (browserHasUser) {
+      const ensured = await persistence_ensure_server_auth();
+      if (!ensured) {
+        setError(
+          "Вход выполнен в браузере, но сессия не синхронизирована с сервером. Обновите страницу и попробуйте снова."
+        );
+        setCases([]);
+        setLoading(false);
+        return;
       }
+      if (!serverHasSession) {
+        router.refresh();
+      }
+    } else if (!serverHasSession) {
+      setError("Войдите в аккаунт, чтобы увидеть сохранённые кейсы.");
+      setCases([]);
+      setLoading(false);
+      return;
     }
 
     const r = await persistence_list_cases();
@@ -81,7 +121,7 @@ export function CasesPageClient({ serverHasSession }: Props) {
     }
     setCases(r.cases);
     setLoading(false);
-  }, [serverHasSession]);
+  }, [authReady, browserHasUser, router, serverHasSession]);
 
   useEffect(() => {
     void load();
