@@ -7,19 +7,31 @@ import { GuardedCaseFeatureLink } from "@/components/auth/GuardedCaseFeatureLink
 import { PsyAssistLogo } from "@/components/brand/PsyAssistLogo";
 import { QaModeBadgeClient } from "@/components/qa/QaModeBadgeClient";
 import { Container } from "@/components/ui/Container";
+import { profileDisplayName } from "@/lib/user/profile";
 import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
 
-function emailInitial(email: string): string {
-  const ch = email.trim().charAt(0);
+function labelInitial(label: string): string {
+  const ch = label.trim().charAt(0);
   return ch ? ch.toLocaleUpperCase("ru-RU") : "?";
 }
 
-export function AppHeaderClient({ initialEmail }: { initialEmail: string | null }) {
+type Props = {
+  initialEmail: string | null;
+  initialName: string | null;
+};
+
+export function AppHeaderClient({ initialEmail, initialName }: Props) {
   const [email, setEmail] = useState(initialEmail);
+  const [displayName, setDisplayName] = useState(() =>
+    initialEmail ? profileDisplayName(initialName, initialEmail) : null
+  );
+  const [profilePending, setProfilePending] = useState(false);
 
   useEffect(() => {
     setEmail(initialEmail);
-  }, [initialEmail]);
+    setDisplayName(initialEmail ? profileDisplayName(initialName, initialEmail) : null);
+    setProfilePending(false);
+  }, [initialEmail, initialName]);
 
   useEffect(() => {
     const client = createSupabaseBrowserClientOptional();
@@ -35,7 +47,40 @@ export function AppHeaderClient({ initialEmail }: { initialEmail: string | null 
     return () => data.subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!email) {
+      setDisplayName(null);
+      setProfilePending(false);
+      return;
+    }
+
+    let cancelled = false;
+    const hasLabel = Boolean(profileDisplayName(initialName, email));
+    if (!hasLabel) setProfilePending(true);
+
+    void fetch("/api/user/profile", { credentials: "include", cache: "no-store" })
+      .then((res) => res.json())
+      .then((data: { ok?: boolean; profile?: { name?: string | null } }) => {
+        if (cancelled) return;
+        const name = data?.ok && data.profile ? data.profile.name : initialName;
+        setDisplayName(profileDisplayName(name, email));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDisplayName(profileDisplayName(initialName, email));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setProfilePending(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [email, initialName]);
+
   const loggedIn = Boolean(email);
+  const accountLabel = displayName ?? "Аккаунт";
 
   return (
     <header className="sticky top-0 z-50 shrink-0 flex-none border-b border-[color:var(--border)] bg-[color:color-mix(in srgb,var(--bg) 92%,transparent)] backdrop-blur-md supports-[backdrop-filter]:bg-[color:color-mix(in srgb,var(--bg) 82%,transparent)] md:static md:top-auto">
@@ -65,10 +110,17 @@ export function AppHeaderClient({ initialEmail }: { initialEmail: string | null 
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in srgb,var(--accent-sand) 35%,white)] text-xs font-semibold text-[color:var(--text)]"
                   aria-hidden
                 >
-                  {email ? emailInitial(email) : "•"}
+                  {displayName ? labelInitial(displayName) : email ? labelInitial(email) : "•"}
                 </span>
                 <span className="tracking-[-0.02em] max-md:min-w-0 max-md:truncate max-md:whitespace-nowrap">
-                  Аккаунт
+                  {profilePending ? (
+                    <span
+                      className="inline-block h-4 w-[4.5rem] animate-pulse rounded-md bg-[color:color-mix(in srgb,var(--muted) 28%,transparent)]"
+                      aria-hidden
+                    />
+                  ) : (
+                    accountLabel
+                  )}
                 </span>
               </Link>
             ) : (

@@ -46,6 +46,16 @@ export interface UserProfile {
   updatedAt: string;
 }
 
+/** Имя для UI: `name` или локальная часть email. */
+export function profileDisplayName(name: string | null | undefined, email: string | null): string | null {
+  const trimmed = name?.trim();
+  if (trimmed) return trimmed;
+  if (!email) return null;
+  const at = email.indexOf("@");
+  const local = (at > 0 ? email.slice(0, at) : email).trim();
+  return local || null;
+}
+
 export function rowToUserProfile(row: UserProfileRow): UserProfile {
   return {
     id: row.id,
