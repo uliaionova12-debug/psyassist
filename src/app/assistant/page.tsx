@@ -97,6 +97,7 @@ import {
   CASE_PERSISTENCE_BANNER_FREE_ACCOUNT_TEXT,
 } from "@/lib/auth/case-persistence-modal-copy";
 import { useCasePersistenceAuth } from "@/components/auth/CasePersistenceAuthProvider";
+import { CaseMemoryPremiumCard } from "@/components/billing/CaseMemoryPremiumCard";
 import { CasePurchasePaywall } from "@/components/billing/CasePurchasePaywall";
 import { FreeIntroPaywall } from "@/components/billing/FreeIntroPaywall";
 import { GuestPaywallHint } from "@/components/billing/GuestPaywallHint";
@@ -2152,6 +2153,9 @@ export default function AssistantPage() {
               <p className="whitespace-pre-line text-sm leading-relaxed text-[color:var(--muted)]">
                 {CASE_CONFIDENTIALITY_REMINDER}
               </p>
+              {authReady && (
+                <CaseMemoryPremiumCard isAuthenticated={Boolean(authUser)} />
+              )}
               {caseStartBlocked ? (
                 <div className="space-y-5">
                   <p className="text-sm leading-relaxed text-[color:var(--muted)] whitespace-pre-line">
