@@ -12,16 +12,5 @@ alter table public.cases
 alter table public.cases
   add column if not exists resume_available boolean generated always as (session_snapshot is not null) stored;
 
--- Align UPDATE policy with Postgres RLS (USING + WITH CHECK), same as profiles.
-drop policy if exists "cases_update_own" on public.cases;
-
-create policy "cases_update_own" on public.cases
-  for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
-drop policy if exists "cases_insert_own" on public.cases;
-
-create policy "cases_insert_own" on public.cases
-  for insert
-  with check (auth.uid() = user_id);
+-- RLS ownership policies: see 20260517140000_cases_auth_user_id_rls.sql
+-- (production may have user_id bigint; auth.uid() is uuid).

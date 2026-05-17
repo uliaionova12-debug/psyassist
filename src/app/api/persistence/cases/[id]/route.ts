@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { get_case_by_id, patch_case_status } from "@/lib/persistence/cases";
+import { case_owned_by_user, get_case_by_id, patch_case_status } from "@/lib/persistence/cases";
 import { caseRowToSupervisionCase } from "@/lib/persistence/supervision-case";
 import { createSupabaseServerClientOptional } from "@/lib/supabase/server-optional";
 
@@ -30,7 +30,7 @@ export async function GET(_req: Request, ctx: RouteParams) {
 
   try {
     const row = await get_case_by_id(supabase, caseId);
-    if (!row || row.user_id !== user.id) {
+    if (!row || !case_owned_by_user(row, user.id)) {
       return NextResponse.json({ ok: false as const, code: "NOT_FOUND" }, { status: 404 });
     }
     return NextResponse.json({ ok: true as const, case: caseRowToSupervisionCase(row) });
@@ -75,7 +75,7 @@ export async function PATCH(req: Request, ctx: RouteParams) {
 
   try {
     const row = await get_case_by_id(supabase, caseId);
-    if (!row || row.user_id !== user.id) {
+    if (!row || !case_owned_by_user(row, user.id)) {
       return NextResponse.json({ ok: false as const, code: "NOT_FOUND" }, { status: 404 });
     }
     await patch_case_status(supabase, caseId, user.id, parsed.data.status);

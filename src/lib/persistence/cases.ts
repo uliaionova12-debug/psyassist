@@ -2,6 +2,17 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { CaseRow, CaseSummaryRow } from "@/lib/persistence/types";
 
+/** Column used for Supabase Auth ownership (RLS: auth.uid() = auth_user_id). */
+export const CASE_AUTH_OWNER_COLUMN = "auth_user_id" as const;
+
+export function case_owned_by_user(
+  row: Pick<CaseRow, "auth_user_id" | "user_id">,
+  userId: string
+): boolean {
+  if (row.auth_user_id) return row.auth_user_id === userId;
+  return row.user_id != null && String(row.user_id) === userId;
+}
+
 export type SaveCaseInput = {
   userName: string | null;
   caseTitle: string;
@@ -11,7 +22,7 @@ export type SaveCaseInput = {
 };
 
 export type SaveCaseInsertPayload = {
-  user_id: string;
+  auth_user_id: string;
   user_name: string | null;
   case_title: string;
   client_name: string;
@@ -24,7 +35,7 @@ export type SaveCaseInsertPayload = {
 
 export function build_save_case_payload(userId: string, input: SaveCaseInput): SaveCaseInsertPayload {
   return {
-    user_id: userId,
+    auth_user_id: userId,
     user_name: input.userName,
     case_title: input.caseTitle,
     client_name: input.clientName,
@@ -73,7 +84,7 @@ export async function append_case_context(
     .from("cases")
     .select("case_context")
     .eq("id", caseId)
-    .eq("user_id", userId)
+    .eq(CASE_AUTH_OWNER_COLUMN, userId)
     .single();
 
   if (selErr) throw selErr;
@@ -85,7 +96,7 @@ export async function append_case_context(
     .from("cases")
     .update({ case_context: next, updated_at: now })
     .eq("id", caseId)
-    .eq("user_id", userId);
+    .eq(CASE_AUTH_OWNER_COLUMN, userId);
 
   if (updErr) throw updErr;
 }
@@ -101,7 +112,7 @@ export async function update_case_initial(
     .from("cases")
     .update({ initial_case: initialCase, updated_at: now })
     .eq("id", caseId)
-    .eq("user_id", userId);
+    .eq(CASE_AUTH_OWNER_COLUMN, userId);
 
   if (error) throw error;
 }
@@ -116,7 +127,7 @@ export async function get_user_cases(
     .select(
       "id, case_title, client_name, first_session_date, created_at, updated_at, status, focus, current_step, current_layer, duration_minutes, last_insight, resume_available"
     )
-    .eq("user_id", userId)
+    .eq(CASE_AUTH_OWNER_COLUMN, userId)
     .order("updated_at", { ascending: false })
     .limit(limit);
 
@@ -160,7 +171,7 @@ export async function complete_case_session(
         : {}),
     })
     .eq("id", caseId)
-    .eq("user_id", userId)
+    .eq(CASE_AUTH_OWNER_COLUMN, userId)
     .select("id")
     .maybeSingle();
 
@@ -198,7 +209,7 @@ export async function patch_case_progress(
     .from("cases")
     .update({ ...fields, updated_at: now })
     .eq("id", caseId)
-    .eq("user_id", userId);
+    .eq(CASE_AUTH_OWNER_COLUMN, userId);
 
   if (error) throw error;
 }
@@ -214,7 +225,7 @@ export async function patch_case_status(
     .from("cases")
     .update({ status, updated_at: now })
     .eq("id", caseId)
-    .eq("user_id", userId);
+    .eq(CASE_AUTH_OWNER_COLUMN, userId);
 
   if (error) throw error;
 }
@@ -228,7 +239,7 @@ export async function get_case_session_snapshot_json(
     .from("cases")
     .select("session_snapshot")
     .eq("id", caseId)
-    .eq("user_id", userId)
+    .eq(CASE_AUTH_OWNER_COLUMN, userId)
     .maybeSingle();
 
   if (error) throw error;

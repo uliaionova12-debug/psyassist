@@ -74,7 +74,7 @@ export default async function DashboardPage() {
   const { data: recentCases } = await supabase
     .from("cases")
     .select("id, case_title, updated_at")
-    .eq("user_id", user.id)
+    .eq("auth_user_id", user.id)
     .order("updated_at", { ascending: false })
     .limit(5);
 

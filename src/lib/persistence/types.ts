@@ -1,7 +1,10 @@
 /** Row shape for public.cases */
 export type CaseRow = {
   id: number;
-  user_id: string;
+  /** Supabase Auth owner (RLS). Prefer over legacy user_id. */
+  auth_user_id: string | null;
+  /** Legacy column; uuid in fresh migrations, bigint possible in production. */
+  user_id?: string | number | null;
   user_name: string | null;
   case_title: string | null;
   client_name: string | null;

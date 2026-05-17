@@ -20,7 +20,8 @@
 Примените миграции (по порядку):
 
 1. `supabase/migrations/20260209120000_psyassist_persistence.sql`
-2. `supabase/migrations/20260514120000_case_structured_memory.sql` (или объединённая `20260517120000_cases_rls_and_structured_memory.sql`)
+2. `supabase/migrations/20260517120000_cases_rls_and_structured_memory.sql`
+3. `supabase/migrations/20260517140000_cases_auth_user_id_rls.sql` (обязательно, если в production `cases.user_id` — bigint)
 
 Способ:
 
@@ -33,11 +34,11 @@
 - `public.supervision_progress`
 - `public.supervision_sessions`
 
-Включён **RLS** на всех трёх; политики завязаны на `**auth.uid() = user_id`** (select / insert / update; для `cases` также delete по своим строкам).
+Включён **RLS** на всех трёх. Для `cases` владелец — `**auth_user_id uuid`** (`auth.uid() = auth_user_id`). Остальные таблицы persistence — `user_id uuid`.
 
 ## Auth
 
-Строки привязаны к `**auth.users.id`** (`user_id uuid`). Пока пользователь **не залогинен** через Supabase Auth в этом же браузере (cookie-сессия для `@supabase/ssr`), API вернёт `{ ok: false, code: "NO_SESSION" }` — это ожидаемо, не ошибка сервера.
+Строки кейсов привязаны к `**auth.users.id`** через `auth_user_id`. Пока пользователь **не залогинен** через Supabase Auth в этом же браузере (cookie-сессия для `@supabase/ssr`), API вернёт `{ ok: false, code: "NO_SESSION" }` — это ожидаемо, не ошибка сервера.
 
 ## Поведение API (проверка готовности)
 
