@@ -82,6 +82,7 @@ import {
   isPersistenceUnavailableCode,
   persistence_append_case_context,
   persistence_complete_case_session,
+  persistence_ensure_server_auth,
   persistence_get_case_resume,
   persistence_save_case,
   persistence_supervision_finish,
@@ -639,7 +640,7 @@ export default function AssistantPage() {
   }, [authReady, authUser?.id, rawDispatch, router, persistenceCtx.notePersistenceUnavailable]);
 
   useEffect(() => {
-    if (session.step !== "finished" || !authUser?.id) return;
+    if (session.step !== "finished" || !authReady || !authUser?.id) return;
     const onceKey = `finished-auth:${authUser.id}`;
     if (persistFinishOnceRef.current === onceKey || finishSaveInFlightRef.current) return;
 
@@ -662,6 +663,11 @@ export default function AssistantPage() {
 
     void (async () => {
       try {
+        if (!(await persistence_ensure_server_auth())) {
+          setFinishSaveStatus("error");
+          return;
+        }
+
         let caseId = sessionRef.current.remoteCaseId;
         if (caseId == null) {
           const alias = snapshotSession!.intake.client_alias?.trim();
@@ -725,6 +731,7 @@ export default function AssistantPage() {
     })();
   }, [
     session.step,
+    authReady,
     authUser?.id,
     finishSaveRetryTick,
     persistBilling,
@@ -868,7 +875,7 @@ export default function AssistantPage() {
         (action.type === "POST_REFLECTION_ACTION" && action.id === "finish_after_reflection") ||
         action.type === "NAV_SUPERVISION_TAIL_FINISH"
       ) {
-        if (loggedInPersistenceRef.current && s.remoteCaseId != null) {
+        if (loggedInPersistenceRef.current) {
           try {
             preFinishSessionRef.current = JSON.parse(JSON.stringify(s)) as SupervisionSession;
           } catch {
@@ -1212,6 +1219,7 @@ export default function AssistantPage() {
 
   useEffect(() => {
     if (!authReady) return;
+    if (session.step === "finished" || finishSaveInFlightRef.current) return;
     void syncAssistantCaseInitialState({
       session,
       lastSyncedSigRef: lastSyncedNarrativeSigRef,

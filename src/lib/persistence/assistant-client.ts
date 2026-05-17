@@ -2,6 +2,7 @@
  * Browser helpers for PsyAssist persistence API routes (cookie session → Supabase).
  */
 
+import { createSupabaseBrowserClientOptional } from "@/lib/supabase/browser-optional";
 import type { AssistantSessionSnapshotV1 } from "@/lib/persistence/assistant-session-snapshot";
 import type { SupervisionCase, SupervisionCaseSummary } from "@/lib/persistence/types";
 
@@ -80,6 +81,26 @@ export async function persistence_get_supervision_case(caseId: number): Promise<
 
 export function isPersistenceUnavailableCode(code: PersistenceFailureCode | undefined): boolean {
   return code === "SUPABASE_DISABLED" || code === "NO_SESSION";
+}
+
+/** Refresh client session cookies, then verify server sees the user (before finish save/complete). */
+export async function persistence_ensure_server_auth(): Promise<boolean> {
+  const client = createSupabaseBrowserClientOptional();
+  if (client) {
+    const {
+      data: { session },
+    } = await client.auth.getSession();
+    if (session) {
+      await client.auth.refreshSession().catch(() => {});
+    }
+  }
+  try {
+    const res = await fetch("/api/user/profile", { credentials: "include", cache: "no-store" });
+    const data = (await res.json()) as { ok?: boolean };
+    return Boolean(data.ok);
+  } catch {
+    return false;
+  }
 }
 
 export async function persistence_supervision_start(): Promise<
