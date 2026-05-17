@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { isTensionInterruptEnabled } from "@/lib/clinical/tension-feature-flag";
 import { generateClinicalGeminiCompletion } from "@/lib/ai/gemini-clinical";
 import { emitFounderTelemetry, resolveFounderTelemetryAuth } from "@/lib/telemetry/founder";
 import {
@@ -37,6 +38,14 @@ const HypothesisBodySchema = z.object({
 const BodySchema = z.discriminatedUnion("phase", [StopBodySchema, HypothesisBodySchema]);
 
 export async function POST(req: Request) {
+  if (!isTensionInterruptEnabled()) {
+    console.warn("[PSYASSIST] /api/assistant/tension blocked (beta hard-off)");
+    return NextResponse.json(
+      { ok: false as const, code: "TENSION_DISABLED" },
+      { status: 403 }
+    );
+  }
+
   const parsed = BodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     console.info("[TENSION] route POST invalid body");

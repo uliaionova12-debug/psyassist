@@ -1,14 +1,28 @@
 /**
  * Production beta: tension interrupt is hard-disabled in code.
- * Set to `true` and redeploy to re-enable (optionally also set
- * NEXT_PUBLIC_TENSION_INTERRUPT_ENABLED=true for explicit env override).
+ * Re-enable only by setting TENSION_INTERRUPT_ENABLED = true and redeploying.
  */
 export const TENSION_INTERRUPT_ENABLED = false;
 
-/** Client-visible gate for tension interrupt in question_flow. */
+/** Shown in console on assistant load — proves this bundle includes the beta hard-off gate. */
+export const TENSION_INTERRUPT_BUILD_MARKER = "psyassist-tension-off-beta-2026-05";
+
+export type TensionSessionStep =
+  | "tension_stop_loading"
+  | "tension_stop"
+  | "tension_hypothesis_loading";
+
+const TENSION_STEPS = new Set<TensionSessionStep>([
+  "tension_stop_loading",
+  "tension_stop",
+  "tension_hypothesis_loading",
+]);
+
+export function isTensionSessionStep(step: string): step is TensionSessionStep {
+  return TENSION_STEPS.has(step as TensionSessionStep);
+}
+
+/** Client-visible gate for tension interrupt in question_flow. Always false for beta. */
 export function isTensionInterruptEnabled(): boolean {
-  if (!TENSION_INTERRUPT_ENABLED) return false;
-  const v = process.env.NEXT_PUBLIC_TENSION_INTERRUPT_ENABLED;
-  if (!v) return false;
-  return v === "1" || v.toLowerCase() === "true";
+  return false;
 }

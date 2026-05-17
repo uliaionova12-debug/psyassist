@@ -22,7 +22,10 @@ import {
   THERAPIST_SPECIALIZATION_OTHER,
 } from "@/lib/clinical/therapist-profile";
 import { isSupervisorStyleLabel } from "@/lib/clinical/supervisor-style";
-import { isTensionInterruptEnabled } from "@/lib/clinical/tension-feature-flag";
+import {
+  isTensionInterruptEnabled,
+  isTensionSessionStep,
+} from "@/lib/clinical/tension-feature-flag";
 
 export type NavTailPhase = "psychotype" | "supervision_followup";
 
@@ -390,6 +393,7 @@ export type SupervisionAction =
   | { type: "TENSION_HYPOTHESIS_SUCCESS"; analysis: string }
   | { type: "TENSION_HYPOTHESIS_FAILURE"; message: string }
   | { type: "TENSION_FLOW_CANCEL" }
+  | { type: "TENSION_BETA_SANITIZE_RESTORED" }
   | { type: "OPEN_CHAT_ANALYSIS" }
   | { type: "CHAT_ANALYSIS_SELECT_FOCUS"; key: ChatFocusPromptKey }
   | { type: "CHAT_ANALYSIS_SUBMIT" }
@@ -764,6 +768,7 @@ export function supervisionReducer(
     }
 
     case "TENSION_STOP_SUCCESS":
+      if (!isTensionInterruptEnabled()) return state;
       return {
         ...state,
         tensionStopText: action.text.trim(),
@@ -772,6 +777,7 @@ export function supervisionReducer(
       };
 
     case "TENSION_STOP_FAILURE": {
+      if (!isTensionInterruptEnabled()) return state;
       const pending = state.tensionPending;
       const restoreDraft = pending?.originalAnswer ?? "";
       if (!pending) {
@@ -805,6 +811,7 @@ export function supervisionReducer(
     }
 
     case "TENSION_SUBMIT_PROBE": {
+      if (!isTensionInterruptEnabled()) return state;
       const pending = state.tensionPending;
       if (!pending) return state;
       const probe = state.draftInput.trim();
@@ -819,6 +826,7 @@ export function supervisionReducer(
     }
 
     case "TENSION_HYPOTHESIS_SUCCESS": {
+      if (!isTensionInterruptEnabled()) return state;
       const pending = state.tensionPending;
       if (!pending || !pending.probeAnswer) return state;
       if (!state.focusKey || !state.sessionDepth) return state;
@@ -875,12 +883,25 @@ export function supervisionReducer(
     }
 
     case "TENSION_HYPOTHESIS_FAILURE":
+      if (!isTensionInterruptEnabled()) return state;
       return {
         ...state,
         tensionFlowError: action.message,
         draftInput: state.tensionPending?.probeAnswer ?? state.draftInput,
         step: "tension_stop",
       };
+
+    case "TENSION_BETA_SANITIZE_RESTORED": {
+      if (isTensionInterruptEnabled()) return state;
+      if (!isTensionSessionStep(state.step)) return state;
+      return {
+        ...state,
+        tensionPending: null,
+        tensionStopText: "",
+        tensionFlowError: "",
+        step: "question_flow",
+      };
+    }
 
     case "TENSION_FLOW_CANCEL": {
       const pending = state.tensionPending;

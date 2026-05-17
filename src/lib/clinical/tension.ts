@@ -2,6 +2,8 @@
  * Tension interrupt engine (Telegram main.py): detection + stop / hypothesis prompts.
  */
 
+import { isTensionInterruptEnabled } from "@/lib/clinical/tension-feature-flag";
+
 export interface TensionModuleSlice {
   num: number;
   name: string;
@@ -70,6 +72,12 @@ export const TENSION_STOP_MAX_RESPONSE_CHARS = 400;
 export function detect_tension_signals(text: string): boolean {
   const t = text.toLowerCase();
   return TENSION_SIGNAL_MARKERS.some((m) => t.includes(m));
+}
+
+/** Gate detection behind beta tension flag (always false in production beta). */
+export function should_trigger_tension_interrupt(text: string): boolean {
+  if (!isTensionInterruptEnabled()) return false;
+  return detect_tension_signals(text);
 }
 
 export function build_tension_stop_prompt(

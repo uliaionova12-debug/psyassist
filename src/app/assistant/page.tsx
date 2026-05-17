@@ -72,8 +72,12 @@ import {
   type IntegrationReflectionAnswerItem,
 } from "@/lib/clinical/reflection";
 import { buildPremiumSessionPlainExport } from "@/lib/clinical/session-plain-export";
-import { isTensionInterruptEnabled } from "@/lib/clinical/tension-feature-flag";
-import { detect_tension_signals, TENSION_STOP_STEP_ONE_OPTIONS } from "@/lib/clinical/tension";
+import {
+  isTensionInterruptEnabled,
+  isTensionSessionStep,
+  TENSION_INTERRUPT_BUILD_MARKER,
+} from "@/lib/clinical/tension-feature-flag";
+import { TENSION_STOP_STEP_ONE_OPTIONS } from "@/lib/clinical/tension";
 import {
   classifyAssistantPromptResponse,
   type AssistantApiPayload,
@@ -155,11 +159,34 @@ const choiceRowSelected =
 
 type SnapshotRestoreAction = { type: "__PSYASSIST_RESTORE__"; payload: SupervisionSession };
 
+const TENSION_DISPATCH_BLOCKED = new Set([
+  "TENSION_INTERRUPT_START",
+  "TENSION_STOP_SUCCESS",
+  "TENSION_STOP_FAILURE",
+  "TENSION_SUBMIT_PROBE",
+  "TENSION_HYPOTHESIS_SUCCESS",
+  "TENSION_HYPOTHESIS_FAILURE",
+  "TENSION_FLOW_CANCEL",
+]);
+
+function sanitizeRestoredSessionIfTensionOff(session: SupervisionSession): SupervisionSession {
+  if (isTensionInterruptEnabled() || !isTensionSessionStep(session.step)) return session;
+  return {
+    ...session,
+    tensionPending: null,
+    tensionStopText: "",
+    tensionFlowError: "",
+    step: "question_flow",
+  };
+}
+
 function withSnapshotRestore(
   inner: (state: SupervisionSession, action: SupervisionAction) => SupervisionSession
 ) {
   return (state: SupervisionSession, action: SupervisionAction | SnapshotRestoreAction): SupervisionSession => {
-    if (action.type === "__PSYASSIST_RESTORE__") return action.payload;
+    if (action.type === "__PSYASSIST_RESTORE__") {
+      return sanitizeRestoredSessionIfTensionOff(action.payload);
+    }
     return inner(state, action);
   };
 }
@@ -224,6 +251,15 @@ async function fetchTensionOnce(
   signal: AbortSignal,
   logSuffix: string
 ): Promise<Response> {
+  if (!isTensionInterruptEnabled()) {
+    console.warn(
+      `[PSYASSIST] ${TENSION_INTERRUPT_BUILD_MARKER} tension fetch blocked (${logSuffix})`
+    );
+    return new Response(JSON.stringify({ ok: false, code: "TENSION_DISABLED" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   const combined = new AbortController();
   const onParentAbort = () => combined.abort();
   signal.addEventListener("abort", onParentAbort);
@@ -612,6 +648,18 @@ export default function AssistantPage() {
   }, [rawDispatch]);
 
   useEffect(() => {
+    console.warn(
+      `[PSYASSIST] ${TENSION_INTERRUPT_BUILD_MARKER} tension_interrupt=DISABLED (beta hard-off)`
+    );
+  }, []);
+
+  useEffect(() => {
+    if (isTensionInterruptEnabled()) return;
+    if (!isTensionSessionStep(session.step)) return;
+    rawDispatch({ type: "TENSION_BETA_SANITIZE_RESTORED" });
+  }, [session.step, rawDispatch]);
+
+  useEffect(() => {
     if (!authReady || !authUser?.id) return;
     const ridRaw =
       typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("resume") : null;
@@ -829,8 +877,14 @@ export default function AssistantPage() {
         }
       }
 
-      if (action.type === "TENSION_INTERRUPT_START" && !isTensionInterruptEnabled()) {
-        return;
+      if (!isTensionInterruptEnabled()) {
+        if (action.type === "TENSION_BETA_SANITIZE_RESTORED") {
+          rawDispatch(action);
+          return;
+        }
+        if (TENSION_DISPATCH_BLOCKED.has(action.type)) {
+          return;
+        }
       }
       if (action.type === "TENSION_INTERRUPT_START" && s.tensionCompleted) {
         return;
@@ -2134,18 +2188,6 @@ export default function AssistantPage() {
   const submitQuestionBankAnswer = () => {
     const text = session.draftInput.trim();
     if (!text || !session.focusKey || !session.sessionDepth) return;
-    const bankTotal = getTotalQuestionCount(session.focusKey, session.sessionDepth);
-    const hasNextBankQuestion = session.questionModuleIdx + 1 < bankTotal;
-    if (
-      isTensionInterruptEnabled() &&
-      session.supervisionAnswers.length > 0 &&
-      !session.tensionCompleted &&
-      hasNextBankQuestion &&
-      detect_tension_signals(text)
-    ) {
-      dispatch({ type: "TENSION_INTERRUPT_START" });
-      return;
-    }
     dispatch({ type: "SUBMIT_QUESTION_ANSWER" });
   };
 
