@@ -409,7 +409,10 @@ export default function AssistantPage() {
           setBillingHydrated(false);
           setBillingProfile(DEFAULT_BILLING_PROFILE);
         }
-        fetchProfileAndHydrate();
+        // TOKEN_REFRESHED must not reset billingHydrated or refetch profile mid-clinical flow.
+        if (isNewIdentity || event === "INITIAL_SESSION" || event === "SIGNED_IN") {
+          fetchProfileAndHydrate();
+        }
       } else if (event === "SIGNED_OUT") {
         lastHandledAuthUserIdRef.current = null;
         setBillingHydrated(true);
@@ -670,7 +673,7 @@ export default function AssistantPage() {
 
   useEffect(() => {
     const id = window.setTimeout(() => {
-      saveAssistantSessionSnapshot(session, pendingAppendsRef.current);
+      saveAssistantSessionSnapshot(sessionRef.current, pendingAppendsRef.current);
     }, 400);
     return () => window.clearTimeout(id);
   }, [session]);
@@ -1355,6 +1358,9 @@ export default function AssistantPage() {
   const reflectionKeyRef = useRef<string | null>(null);
   /** Bumps when a new integration reflection fetch starts; stale completions must not dispatch. */
   const integrationReflectionFetchGenRef = useRef(0);
+  /** Stale tension_stop_loading / tension_hypothesis_loading completions must not dispatch. */
+  const tensionStopFetchGenRef = useRef(0);
+  const tensionHypothesisFetchGenRef = useRef(0);
   const closingIntegrationKeyRef = useRef<string | null>(null);
 
   const runDetection = useCallback(async () => {
@@ -1730,6 +1736,7 @@ export default function AssistantPage() {
 
     console.info("[TENSION] step entered tension_stop_loading effect");
     const ac = new AbortController();
+    const fetchGen = ++tensionStopFetchGenRef.current;
     const body = {
       phase: "stop" as const,
       module: {
@@ -1750,8 +1757,11 @@ export default function AssistantPage() {
       try {
         const res = await fetchTensionWithOptionalRetry(body, ac.signal, "phase=stop");
         if (ac.signal.aborted) return;
+        if (fetchGen !== tensionStopFetchGenRef.current) return;
         const data = (await res.json()) as { ok?: boolean; text?: string; message?: string };
         if (ac.signal.aborted) return;
+        if (fetchGen !== tensionStopFetchGenRef.current) return;
+        if (sessionRef.current.step !== "tension_stop_loading") return;
         if (data.ok && data.text?.trim()) {
           console.info("[TENSION] reducer advance TENSION_STOP_SUCCESS");
           dispatch({
@@ -1760,6 +1770,9 @@ export default function AssistantPage() {
           });
           return;
         }
+        if (ac.signal.aborted) return;
+        if (fetchGen !== tensionStopFetchGenRef.current) return;
+        if (sessionRef.current.step !== "tension_stop_loading") return;
         console.info("[TENSION] reducer advance TENSION_STOP_FAILURE (response)");
         dispatch({
           type: "TENSION_STOP_FAILURE",
@@ -1770,6 +1783,8 @@ export default function AssistantPage() {
           console.info("[TENSION] tension_stop_loading aborted (cleanup), no dispatch");
           return;
         }
+        if (fetchGen !== tensionStopFetchGenRef.current) return;
+        if (sessionRef.current.step !== "tension_stop_loading") return;
         console.info("[TENSION] reducer advance TENSION_STOP_FAILURE (exception)", err);
         dispatch({
           type: "TENSION_STOP_FAILURE",
@@ -1805,6 +1820,7 @@ export default function AssistantPage() {
 
     console.info("[TENSION] step entered tension_hypothesis_loading effect");
     const ac = new AbortController();
+    const fetchGen = ++tensionHypothesisFetchGenRef.current;
     const body = {
       phase: "hypothesis" as const,
       module: {
@@ -1828,8 +1844,11 @@ export default function AssistantPage() {
       try {
         const res = await fetchTensionWithOptionalRetry(body, ac.signal, "phase=hypothesis");
         if (ac.signal.aborted) return;
+        if (fetchGen !== tensionHypothesisFetchGenRef.current) return;
         const data = (await res.json()) as { ok?: boolean; text?: string; message?: string };
         if (ac.signal.aborted) return;
+        if (fetchGen !== tensionHypothesisFetchGenRef.current) return;
+        if (sessionRef.current.step !== "tension_hypothesis_loading") return;
         if (data.ok && data.text?.trim()) {
           console.info("[TENSION] reducer advance TENSION_HYPOTHESIS_SUCCESS");
           dispatch({
@@ -1838,6 +1857,9 @@ export default function AssistantPage() {
           });
           return;
         }
+        if (ac.signal.aborted) return;
+        if (fetchGen !== tensionHypothesisFetchGenRef.current) return;
+        if (sessionRef.current.step !== "tension_hypothesis_loading") return;
         console.info("[TENSION] reducer advance TENSION_HYPOTHESIS_FAILURE (response)");
         dispatch({
           type: "TENSION_HYPOTHESIS_FAILURE",
@@ -1848,6 +1870,8 @@ export default function AssistantPage() {
           console.info("[TENSION] tension_hypothesis_loading aborted (cleanup), no dispatch");
           return;
         }
+        if (fetchGen !== tensionHypothesisFetchGenRef.current) return;
+        if (sessionRef.current.step !== "tension_hypothesis_loading") return;
         console.info("[TENSION] reducer advance TENSION_HYPOTHESIS_FAILURE (exception)", err);
         dispatch({
           type: "TENSION_HYPOTHESIS_FAILURE",
