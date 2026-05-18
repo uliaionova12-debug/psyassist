@@ -67,6 +67,7 @@ type Props = {
 
 export function CasesPageClient({ initialEmail }: Props) {
   const [authReady, setAuthReady] = useState(false);
+  const [browserSessionEmail, setBrowserSessionEmail] = useState<string | null>(null);
   const [email, setEmail] = useState(initialEmail);
   const [cases, setCases] = useState<SupervisionCaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,7 +77,10 @@ export function CasesPageClient({ initialEmail }: Props) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const loggedIn = Boolean(email);
+  const effectiveEmail = browserSessionEmail ?? email;
+  const isAuthenticated = effectiveEmail !== null;
+  const showGuestPrompt =
+    authReady && effectiveEmail === null && browserSessionEmail === null;
 
   useEffect(() => {
     setEmail(initialEmail);
@@ -94,23 +98,16 @@ export function CasesPageClient({ initialEmail }: Props) {
     void client.auth.getSession().then(({ data: { session } }) => {
       if (cancelled) return;
       const browserEmail = session?.user?.email ?? null;
-      if (browserEmail) {
-        setEmail(browserEmail);
-      } else if (!initialEmail) {
-        setEmail(null);
-      }
+      setBrowserSessionEmail(browserEmail);
+      setEmail(browserEmail ?? initialEmail);
       setAuthReady(true);
     });
 
     const { data: sub } = client.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
       const browserEmail = session?.user?.email ?? null;
-      if (browserEmail) {
-        setEmail(browserEmail);
-      } else if (event === "SIGNED_OUT") {
-        setEmail(null);
-      }
-      setAuthReady(true);
+      setBrowserSessionEmail(browserEmail);
+      setEmail(browserEmail ?? (event === "SIGNED_OUT" ? null : initialEmail));
     });
 
     return () => {
@@ -119,21 +116,49 @@ export function CasesPageClient({ initialEmail }: Props) {
     };
   }, [initialEmail]);
 
-  const load = useCallback(async () => {
-    if (!authReady) return;
+  useEffect(() => {
+    console.log("[CasesPageClient] auth", {
+      initialEmail,
+      authReady,
+      browserSessionEmail,
+      effectiveEmail,
+      isAuthenticated,
+      showGuestPrompt,
+      loading,
+      error,
+    });
+  }, [
+    initialEmail,
+    authReady,
+    browserSessionEmail,
+    effectiveEmail,
+    isAuthenticated,
+    showGuestPrompt,
+    loading,
+    error,
+  ]);
 
-    if (!loggedIn) {
-      setError("Войдите в аккаунт, чтобы увидеть сохранённые кейсы.");
+  const load = useCallback(async () => {
+    if (!authReady) {
+      console.log("[CasesPageClient] fetch status: waiting-auth");
+      return;
+    }
+
+    if (showGuestPrompt) {
+      console.log("[CasesPageClient] fetch status: skipped-guest");
       setCases([]);
+      setError(null);
       setLoading(false);
       return;
     }
 
+    console.log("[CasesPageClient] fetch status: loading");
     setLoading(true);
     setError(null);
 
     const ensured = await persistence_ensure_server_auth();
     if (!ensured) {
+      console.log("[CasesPageClient] fetch status: error-auth-sync");
       setError(
         "Вход выполнен в браузере, но сессия не синхронизирована с сервером. Обновите страницу и попробуйте снова."
       );
@@ -144,6 +169,7 @@ export function CasesPageClient({ initialEmail }: Props) {
 
     const r = await persistence_list_cases();
     if (!r.ok) {
+      console.log("[CasesPageClient] fetch status: error-list", { code: r.code, message: r.message });
       setError(
         r.code === "SUPABASE_DISABLED"
           ? "Серверное хранение отключено в этой среде."
@@ -153,9 +179,10 @@ export function CasesPageClient({ initialEmail }: Props) {
       setLoading(false);
       return;
     }
+    console.log("[CasesPageClient] fetch status: ok", { count: r.cases.length });
     setCases(r.cases);
     setLoading(false);
-  }, [authReady, loggedIn]);
+  }, [authReady, showGuestPrompt]);
 
   useEffect(() => {
     void load();
@@ -165,7 +192,19 @@ export function CasesPageClient({ initialEmail }: Props) {
     ? cases.filter((c) => c.status === "archived")
     : cases.filter((c) => c.status !== "archived");
 
-  const showSkeleton = !authReady || loading;
+  const showSkeleton = !authReady || (isAuthenticated && loading);
+
+  if (showGuestPrompt) {
+    console.log("[CasesPageClient] render branch: guest-prompt");
+  } else if (authReady && !loading && error) {
+    console.log("[CasesPageClient] render branch: fetch-error", { error });
+  } else if (authReady && isAuthenticated && !loading && !error) {
+    console.log("[CasesPageClient] render branch: authenticated-content", {
+      visibleCount: visible.length,
+    });
+  } else if (!authReady || loading) {
+    console.log("[CasesPageClient] render branch: skeleton", { authReady, loading });
+  }
 
   const openDetail = async (id: string) => {
     setDetailLoading(true);
@@ -209,26 +248,31 @@ export function CasesPageClient({ initialEmail }: Props) {
 
         {showSkeleton && <CasesListSkeleton />}
 
-        {authReady && !loading && error && (
+        {showGuestPrompt && (
           <Card className="mt-8 p-6">
-            <p className="text-sm leading-relaxed text-[color:var(--muted)]">{error}</p>
-            {error.includes("Войдите") ? (
-              <div className="mt-4">
-                <ButtonLink href="/assistant" tone="primary" className="w-full sm:w-auto">
-                  Перейти к супервизии
-                </ButtonLink>
-              </div>
-            ) : (
-              <div className="mt-4">
-                <Button type="button" tone="secondary" onClick={() => void load()}>
-                  Повторить
-                </Button>
-              </div>
-            )}
+            <p className="text-sm leading-relaxed text-[color:var(--muted)]">
+              Войдите в аккаунт, чтобы увидеть сохранённые кейсы.
+            </p>
+            <div className="mt-4">
+              <ButtonLink href="/assistant" tone="primary" className="w-full sm:w-auto">
+                Перейти к супервизии
+              </ButtonLink>
+            </div>
           </Card>
         )}
 
-        {authReady && loggedIn && !loading && !error && visible.length === 0 && (
+        {authReady && !loading && error && (
+          <Card className="mt-8 p-6">
+            <p className="text-sm leading-relaxed text-[color:var(--muted)]">{error}</p>
+            <div className="mt-4">
+              <Button type="button" tone="secondary" onClick={() => void load()}>
+                Повторить
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {authReady && isAuthenticated && !loading && !error && visible.length === 0 && (
           <Card className="mt-8 p-6">
             <p className="text-sm text-[color:var(--muted)]">
               {showArchived
@@ -245,7 +289,7 @@ export function CasesPageClient({ initialEmail }: Props) {
           </Card>
         )}
 
-        {authReady && loggedIn && !loading && !error && visible.length > 0 && (
+        {authReady && isAuthenticated && !loading && !error && visible.length > 0 && (
           <ul className="mt-8 grid list-none grid-cols-1 gap-4 p-0 md:grid-cols-2">
             {visible.map((c) => (
               <li key={c.id}>
