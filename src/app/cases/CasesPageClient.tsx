@@ -61,9 +61,13 @@ function CasesListSkeleton() {
   );
 }
 
-export function CasesPageClient() {
+type Props = {
+  initialEmail: string | null;
+};
+
+export function CasesPageClient({ initialEmail }: Props) {
   const [authReady, setAuthReady] = useState(false);
-  const [browserHasUser, setBrowserHasUser] = useState(false);
+  const [email, setEmail] = useState(initialEmail);
   const [cases, setCases] = useState<SupervisionCaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +75,12 @@ export function CasesPageClient() {
   const [detail, setDetail] = useState<SupervisionCase | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  const loggedIn = Boolean(email);
+
+  useEffect(() => {
+    setEmail(initialEmail);
+  }, [initialEmail]);
 
   useEffect(() => {
     const client = createSupabaseBrowserClientOptional();
@@ -83,13 +93,23 @@ export function CasesPageClient() {
 
     void client.auth.getSession().then(({ data: { session } }) => {
       if (cancelled) return;
-      setBrowserHasUser(Boolean(session?.user));
+      const browserEmail = session?.user?.email ?? null;
+      if (browserEmail) {
+        setEmail(browserEmail);
+      } else if (!initialEmail) {
+        setEmail(null);
+      }
       setAuthReady(true);
     });
 
-    const { data: sub } = client.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
-      setBrowserHasUser(Boolean(session?.user));
+      const browserEmail = session?.user?.email ?? null;
+      if (browserEmail) {
+        setEmail(browserEmail);
+      } else if (event === "SIGNED_OUT") {
+        setEmail(null);
+      }
       setAuthReady(true);
     });
 
@@ -97,12 +117,12 @@ export function CasesPageClient() {
       cancelled = true;
       sub.subscription.unsubscribe();
     };
-  }, []);
+  }, [initialEmail]);
 
   const load = useCallback(async () => {
     if (!authReady) return;
 
-    if (!browserHasUser) {
+    if (!loggedIn) {
       setError("Войдите в аккаунт, чтобы увидеть сохранённые кейсы.");
       setCases([]);
       setLoading(false);
@@ -125,11 +145,9 @@ export function CasesPageClient() {
     const r = await persistence_list_cases();
     if (!r.ok) {
       setError(
-        r.code === "NO_SESSION"
-          ? "Войдите в аккаунт, чтобы увидеть сохранённые кейсы."
-          : r.code === "SUPABASE_DISABLED"
-            ? "Серверное хранение отключено в этой среде."
-            : r.message ?? "Не удалось загрузить список."
+        r.code === "SUPABASE_DISABLED"
+          ? "Серверное хранение отключено в этой среде."
+          : r.message ?? "Не удалось загрузить список кейсов. Попробуйте обновить страницу."
       );
       setCases([]);
       setLoading(false);
@@ -137,7 +155,7 @@ export function CasesPageClient() {
     }
     setCases(r.cases);
     setLoading(false);
-  }, [authReady, browserHasUser]);
+  }, [authReady, loggedIn]);
 
   useEffect(() => {
     void load();
@@ -210,7 +228,7 @@ export function CasesPageClient() {
           </Card>
         )}
 
-        {authReady && browserHasUser && !loading && !error && visible.length === 0 && (
+        {authReady && loggedIn && !loading && !error && visible.length === 0 && (
           <Card className="mt-8 p-6">
             <p className="text-sm text-[color:var(--muted)]">
               {showArchived
@@ -227,7 +245,7 @@ export function CasesPageClient() {
           </Card>
         )}
 
-        {authReady && browserHasUser && !loading && !error && visible.length > 0 && (
+        {authReady && loggedIn && !loading && !error && visible.length > 0 && (
           <ul className="mt-8 grid list-none grid-cols-1 gap-4 p-0 md:grid-cols-2">
             {visible.map((c) => (
               <li key={c.id}>
