@@ -68,6 +68,7 @@ type Props = {
 export function CasesPageClient({ initialEmail }: Props) {
   const [authReady, setAuthReady] = useState(false);
   const [browserSessionEmail, setBrowserSessionEmail] = useState<string | null>(null);
+  const [browserHasUser, setBrowserHasUser] = useState(false);
   const [email, setEmail] = useState(initialEmail);
   const [cases, setCases] = useState<SupervisionCaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,10 +78,9 @@ export function CasesPageClient({ initialEmail }: Props) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const effectiveEmail = browserSessionEmail ?? email;
-  const isAuthenticated = effectiveEmail !== null;
-  const showGuestPrompt =
-    authReady && effectiveEmail === null && browserSessionEmail === null;
+  const effectiveEmail = browserSessionEmail ?? email ?? initialEmail;
+  const isAuthenticated = effectiveEmail !== null || browserHasUser;
+  const showGuestPrompt = authReady && !isAuthenticated;
 
   useEffect(() => {
     setEmail(initialEmail);
@@ -98,6 +98,7 @@ export function CasesPageClient({ initialEmail }: Props) {
     void client.auth.getSession().then(({ data: { session } }) => {
       if (cancelled) return;
       const browserEmail = session?.user?.email ?? null;
+      setBrowserHasUser(Boolean(session?.user));
       setBrowserSessionEmail(browserEmail);
       setEmail(browserEmail ?? initialEmail);
       setAuthReady(true);
@@ -106,6 +107,7 @@ export function CasesPageClient({ initialEmail }: Props) {
     const { data: sub } = client.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
       const browserEmail = session?.user?.email ?? null;
+      setBrowserHasUser(Boolean(session?.user));
       setBrowserSessionEmail(browserEmail);
       setEmail(browserEmail ?? (event === "SIGNED_OUT" ? null : initialEmail));
     });
@@ -116,49 +118,21 @@ export function CasesPageClient({ initialEmail }: Props) {
     };
   }, [initialEmail]);
 
-  useEffect(() => {
-    console.log("[CasesPageClient] auth", {
-      initialEmail,
-      authReady,
-      browserSessionEmail,
-      effectiveEmail,
-      isAuthenticated,
-      showGuestPrompt,
-      loading,
-      error,
-    });
-  }, [
-    initialEmail,
-    authReady,
-    browserSessionEmail,
-    effectiveEmail,
-    isAuthenticated,
-    showGuestPrompt,
-    loading,
-    error,
-  ]);
-
   const load = useCallback(async () => {
-    if (!authReady) {
-      console.log("[CasesPageClient] fetch status: waiting-auth");
-      return;
-    }
+    if (!authReady) return;
 
-    if (showGuestPrompt) {
-      console.log("[CasesPageClient] fetch status: skipped-guest");
+    if (!isAuthenticated) {
       setCases([]);
       setError(null);
       setLoading(false);
       return;
     }
 
-    console.log("[CasesPageClient] fetch status: loading");
     setLoading(true);
     setError(null);
 
     const ensured = await persistence_ensure_server_auth();
     if (!ensured) {
-      console.log("[CasesPageClient] fetch status: error-auth-sync");
       setError(
         "Вход выполнен в браузере, но сессия не синхронизирована с сервером. Обновите страницу и попробуйте снова."
       );
@@ -169,7 +143,6 @@ export function CasesPageClient({ initialEmail }: Props) {
 
     const r = await persistence_list_cases();
     if (!r.ok) {
-      console.log("[CasesPageClient] fetch status: error-list", { code: r.code, message: r.message });
       setError(
         r.code === "SUPABASE_DISABLED"
           ? "Серверное хранение отключено в этой среде."
@@ -179,10 +152,9 @@ export function CasesPageClient({ initialEmail }: Props) {
       setLoading(false);
       return;
     }
-    console.log("[CasesPageClient] fetch status: ok", { count: r.cases.length });
     setCases(r.cases);
     setLoading(false);
-  }, [authReady, showGuestPrompt]);
+  }, [authReady, isAuthenticated]);
 
   useEffect(() => {
     void load();
@@ -193,18 +165,6 @@ export function CasesPageClient({ initialEmail }: Props) {
     : cases.filter((c) => c.status !== "archived");
 
   const showSkeleton = !authReady || (isAuthenticated && loading);
-
-  if (showGuestPrompt) {
-    console.log("[CasesPageClient] render branch: guest-prompt");
-  } else if (authReady && !loading && error) {
-    console.log("[CasesPageClient] render branch: fetch-error", { error });
-  } else if (authReady && isAuthenticated && !loading && !error) {
-    console.log("[CasesPageClient] render branch: authenticated-content", {
-      visibleCount: visible.length,
-    });
-  } else if (!authReady || loading) {
-    console.log("[CasesPageClient] render branch: skeleton", { authReady, loading });
-  }
 
   const openDetail = async (id: string) => {
     setDetailLoading(true);
@@ -277,7 +237,7 @@ export function CasesPageClient({ initialEmail }: Props) {
             <p className="text-sm text-[color:var(--muted)]">
               {showArchived
                 ? "В архиве пока пусто."
-                : "Пока нет сохранённых кейсов. Завершите супервизию в ассистенте — кейс появится здесь."}
+                : "У вас пока нет сохранённых кейсов."}
             </p>
             {!showArchived ? (
               <div className="mt-4">
