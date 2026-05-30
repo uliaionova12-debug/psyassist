@@ -280,6 +280,77 @@ export default function HomePage() {
           </Container>
         </section>
 
+        {/* ═══ CASE LIBRARY BANNER ═══ */}
+        <section aria-label="Библиотека кейсов" className="relative overflow-hidden">
+          {/* split background: left photo / right photo */}
+          <div className="absolute inset-0 flex">
+            <div className="relative w-1/2">
+              <Image
+                src="/photos/yulia-notebook1.jpg"
+                alt=""
+                fill
+                className="object-cover object-center"
+                sizes="50vw"
+              />
+              <div className="absolute inset-0 bg-[color:var(--accent-green)]/75" />
+            </div>
+            <div className="relative w-1/2">
+              <Image
+                src="/photos/yulia-notebook2.jpg"
+                alt=""
+                fill
+                className="object-cover object-center"
+                sizes="50vw"
+              />
+              <div className="absolute inset-0 bg-[color:var(--accent-green)]/75" />
+            </div>
+          </div>
+
+          {/* content */}
+          <div className="relative z-10 py-20 sm:py-24 md:py-28">
+            <Container>
+              <AnimateIn className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/60">
+                  Библиотека кейсов
+                </p>
+                <h2 className="mt-4 text-balance text-2xl font-semibold leading-snug tracking-[-0.03em] text-white sm:text-3xl md:text-4xl">
+                  13 реальных клинических сценариев
+                </h2>
+                <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-white/75">
+                  Каждый кейс — результат живой практики. Суицидальный риск, эротический контрперенос, нарциссическое поле, постепенная размытость рамки. Система обучена на реальном, а не на учебнике.
+                </p>
+
+                {/* case pills */}
+                <div className="mx-auto mt-8 flex max-w-2xl flex-wrap justify-center gap-2.5">
+                  {[
+                    "Нарциссический клиент",
+                    "Послеродовый риск",
+                    "Эротический контрперенос",
+                    "Grief bypass",
+                    "Атака на рамку",
+                    "Frame erosion",
+                    "Зависимые отношения",
+                    "Betrayal trauma",
+                    "Medicalized attachment",
+                    "Silent termination",
+                  ].map((label) => (
+                    <span
+                      key={label}
+                      className="rounded-full border border-white/30 bg-white/10 px-3.5 py-1.5 text-xs font-medium text-white backdrop-blur-sm"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </div>
+
+                <ButtonLink href="/case" tone="primary" className="mt-8 px-6 py-3 text-sm">
+                  Попробовать с вашим кейсом →
+                </ButtonLink>
+              </AnimateIn>
+            </Container>
+          </div>
+        </section>
+
         {/* ═══ HOW IT WORKS ═══ */}
         <section id="how-it-works" aria-label="Как работает" className="py-16 sm:py-20 md:py-24">
           <Container>
