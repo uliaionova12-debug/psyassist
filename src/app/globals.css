@@ -25,3 +25,56 @@ body {
   background: color-mix(in srgb, var(--accent-sand) 30%, transparent);
 }
 
+/* ── Landing animations ────────────────────────────── */
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideRight {
+  from { opacity: 0; transform: translateX(32px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-10px); }
+}
+
+@keyframes floatCard {
+  0%, 100% { transform: translateY(0px) rotate(-1deg); }
+  50%       { transform: translateY(-6px) rotate(-1deg); }
+}
+
+@keyframes kenBurns {
+  from { transform: scale(1); }
+  to   { transform: scale(1.06); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.7; }
+}
+
+.anim-fade-up   { animation: fadeUp    0.7s cubic-bezier(0.22,1,0.36,1) both; }
+.anim-fade-in   { animation: fadeIn    0.6s ease both; }
+.anim-slide-right { animation: slideRight 0.7s cubic-bezier(0.22,1,0.36,1) both; }
+.anim-float     { animation: float     3.5s ease-in-out infinite; }
+.anim-float-card { animation: floatCard 4s ease-in-out infinite; }
+.anim-ken-burns { animation: kenBurns  8s ease-in-out alternate infinite; }
+.anim-pulse-soft { animation: pulse-soft 2.5s ease-in-out infinite; }
+
+/* scroll-driven reveal */
+.reveal { opacity: 0; transform: translateY(20px); transition: opacity 0.65s cubic-bezier(0.22,1,0.36,1), transform 0.65s cubic-bezier(0.22,1,0.36,1); }
+.reveal.visible { opacity: 1; transform: translateY(0); }
+
+/* photo hover */
+.photo-hover { transition: transform 0.5s cubic-bezier(0.22,1,0.36,1); }
+.photo-hover:hover { transform: scale(1.02); }
+
