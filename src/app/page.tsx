@@ -140,7 +140,7 @@ export default function HomePage() {
               <div className="anim-slide-right relative w-full max-w-[300px] shrink-0 md:max-w-[360px] lg:max-w-[400px]" style={{ animationDelay: "150ms" }}>
                 <div className="photo-hover relative aspect-[3/4] overflow-hidden rounded-3xl shadow-xl">
                   <Image
-                    src="/photos/yulia-hero.jpg"
+                    src="/photos/yulia-closeup.jpg"
                     alt="Юлия Ионова — клинический психолог, аккредитованный супервизор"
                     fill
                     className="anim-ken-burns object-cover object-top"
@@ -206,9 +206,9 @@ export default function HomePage() {
           <Container>
             <div className="grid grid-cols-3 gap-3 sm:gap-5 md:gap-6">
               {[
-                { src: "/photos/yulia-side.jpg",      alt: "Юлия Ионова — профиль",       delay: 0   },
-                { src: "/photos/yulia-hero.jpg",      alt: "Юлия Ионова — улыбка",        delay: 100 },
-                { src: "/photos/yulia-thinking.jpg",  alt: "Юлия Ионова — размышление",   delay: 200 },
+                { src: "/photos/yulia-standing.jpg",  alt: "Юлия Ионова — психолог",      delay: 0   },
+                { src: "/photos/yulia-closeup.jpg",   alt: "Юлия Ионова — взгляд",        delay: 100 },
+                { src: "/photos/yulia-light.jpg",     alt: "Юлия Ионова — улыбка",        delay: 200 },
               ].map(({ src, alt, delay }) => (
                 <AnimateIn key={src} delay={delay} className="h-full">
                   <div className="photo-hover relative aspect-[3/4] overflow-hidden rounded-2xl sm:rounded-3xl">
@@ -253,10 +253,10 @@ export default function HomePage() {
               <AnimateIn className="w-full max-w-[280px] shrink-0 md:max-w-[320px]">
                 <div className="photo-hover relative aspect-[3/4] overflow-hidden rounded-3xl shadow-xl">
                   <Image
-                    src="/photos/yulia-profile.jpg"
+                    src="/photos/yulia-elegant.jpg"
                     alt="Юлия Ионова — клинический психолог"
                     fill
-                    className="object-cover"
+                    className="object-cover object-top"
                     sizes="(max-width: 768px) 280px, 320px"
                   />
                 </div>
@@ -470,10 +470,10 @@ export default function HomePage() {
               <AnimateIn className="w-full max-w-[240px] shrink-0 md:max-w-[280px]">
                 <div className="photo-hover relative aspect-[3/4] overflow-hidden rounded-3xl shadow-2xl">
                   <Image
-                    src="/photos/yulia-thinking.jpg"
+                    src="/photos/yulia-light.jpg"
                     alt="Юлия Ионова — PsyAssist"
                     fill
-                    className="object-cover"
+                    className="object-cover object-top"
                     sizes="(max-width: 768px) 240px, 280px"
                   />
                 </div>
