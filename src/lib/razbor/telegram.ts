@@ -52,16 +52,32 @@ export function buildTelegramText(input: {
   return lines.join("\n");
 }
 
+function splitLongLine(line: string): string[] {
+  const chunks: string[] = [];
+  let rest = line;
+  while (rest.length > TG_LIMIT) {
+    let cut = TG_LIMIT;
+    const amp = rest.lastIndexOf("&", cut - 1);
+    if (amp > rest.lastIndexOf(";", cut - 1)) cut = amp;
+    const space = rest.lastIndexOf(" ", cut);
+    if (space > TG_LIMIT / 2) cut = space;
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  chunks.push(rest);
+  return chunks;
+}
+
 function splitMessage(text: string): string[] {
   if (text.length <= TG_LIMIT) return [text];
   const parts: string[] = [];
   let current = "";
-  for (const line of text.split("\n")) {
-    if ((current + "\n" + line).length > TG_LIMIT && current) {
+  for (const line of text.split("\n").flatMap(splitLongLine)) {
+    if (current && (current + "\n" + line).length > TG_LIMIT) {
       parts.push(current);
       current = "";
     }
-    current = current ? `${current}\n${line}` : line.slice(0, TG_LIMIT);
+    current = current ? `${current}\n${line}` : line;
   }
   if (current) parts.push(current);
   return parts;
