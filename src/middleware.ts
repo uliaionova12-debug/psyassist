@@ -1,8 +1,16 @@
-import { type NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
+import {
+  isRazborHost,
+  isRazborPath,
+  razborHostResponse,
+} from "@/lib/razbor/host";
 import { updateSession } from "@/lib/supabase/update-session";
 
 export async function middleware(request: NextRequest) {
+  if (isRazborHost(request)) return razborHostResponse(request);
+  // Public client landing: no Supabase auth session needed.
+  if (isRazborPath(request.nextUrl.pathname)) return NextResponse.next();
   return updateSession(request);
 }
 
