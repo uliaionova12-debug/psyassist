@@ -24,7 +24,9 @@ export function RazborApp({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (window.location.hash === "#start") {
-      window.history.replaceState({ razbor: true }, "");
+      const landingUrl = window.location.pathname + window.location.search;
+      window.history.replaceState({ razbor: false }, "", landingUrl);
+      window.history.pushState({ razbor: true }, "", "#start");
       setOpen(true);
     }
     const onPop = (e: PopStateEvent) => setOpen(isFormState(e.state));
