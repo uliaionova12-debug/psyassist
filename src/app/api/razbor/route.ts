@@ -1,6 +1,7 @@
 import { after, NextResponse } from "next/server";
 
 import { generateRazbor } from "@/lib/razbor/ai";
+import { CONTACTS } from "@/lib/razbor/config";
 import type {
   ClientMap,
   InternalNote,
@@ -116,11 +117,22 @@ export async function POST(req: Request) {
     risk: keywordRisk,
     saved,
   });
-  after(async () => {
-    const sent = await sendTelegram(telegramText);
-    if (!sent)
-      console.error("[razbor] telegram notification failed or not configured");
-  });
+  if (saved) {
+    after(async () => {
+      const sent = await sendTelegram(telegramText);
+      if (!sent)
+        console.error(
+          "[razbor] telegram notification failed or not configured",
+        );
+    });
+  } else if (!(await sendTelegram(telegramText))) {
+    console.error("[razbor] lead lost: not saved and telegram failed");
+    return fail(
+      503,
+      "SERVER_ERROR",
+      `Не получилось отправить ответы. Попробуйте ещё раз через минуту или напишите Юлии напрямую: ${CONTACTS.email}.`,
+    );
+  }
 
   return NextResponse.json<RazborApiSuccess>({
     ok: true,
